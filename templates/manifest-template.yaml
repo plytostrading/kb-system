@@ -1,0 +1,189 @@
+# =============================================================================
+# Project Manifest Template
+# =============================================================================
+# Copy this file to your project's .claude/kb-projects/{project-name}.yaml
+# and fill in project-specific values.
+#
+# The kb-* skills read this manifest at invocation time. All project-specific
+# behavior — domains, search queries, code paths, checklists — comes from here.
+#
+# Location: {your-project}/.claude/kb-projects/{name}.yaml  (git-versioned, authoritative)
+# Synced to: Fast.io workspace manifests/{name}.yaml (cloud copy)
+# =============================================================================
+
+manifest_version: 1                    # Bump on every edit
+content_hash: ""                       # Auto-computed by kb-review; leave empty on manual edits
+
+# -----------------------------------------------------------------------------
+# Project identity
+# -----------------------------------------------------------------------------
+project:
+  name: my-project                     # Unique project identifier (kebab-case)
+  description: >
+    Brief description of what this project's knowledge base covers.
+    What domain correctness are you verifying?
+  workspace: shared-kb                 # Fast.io workspace name
+  project_folder: my-project           # Folder within workspace (usually same as name)
+  assessment_mode: code_vs_literature  # code_vs_literature | knowledge_synthesis | decision_audit | plan_review
+
+# -----------------------------------------------------------------------------
+# Domains — the knowledge taxonomy for this project
+# -----------------------------------------------------------------------------
+# Each domain is a topic area with its own search queries, code paths, and
+# review checklist. Domains become folders in Fast.io (sources/, domains/).
+# Start with 2-4 domains; split or merge as the KB grows.
+# -----------------------------------------------------------------------------
+domains:
+  - name: example-domain               # kebab-case identifier
+    description: What this domain covers
+    search_queries:
+      - "search query 1 for this domain"
+      - "search query 2 — use natural language, not keywords"
+    code_paths:                         # For code_vs_literature mode
+      - src/path/to/relevant/code.py
+    review_checklist:                   # Questions to answer during assessment
+      - "Is our implementation of X consistent with published best practices?"
+      - "Does our choice of Y have theoretical support?"
+    foundational_sources:               # Key references to seed the KB
+      - "Author Year — Paper title"
+
+# -----------------------------------------------------------------------------
+# Source adapters — how to discover and extract each content type
+# -----------------------------------------------------------------------------
+# Each adapter defines preferred (MCP/API) and fallback (web search) paths.
+# The system degrades gracefully — works with zero credentials.
+# Add or remove adapters based on your content sources.
+# -----------------------------------------------------------------------------
+source_adapters:
+  paper:
+    discovery:
+      preferred: scholar_gateway
+      fallback: web_search
+    extraction:
+      preferred: web_fetch
+    credentials: {}
+
+  preprint:
+    discovery:
+      preferred: scholar_gateway
+      fallback: web_search
+    extraction:
+      preferred: web_fetch
+    credentials: {}
+
+  blog:
+    discovery:
+      preferred: web_search
+    extraction:
+      preferred: web_fetch
+    credentials: {}
+
+  youtube:
+    discovery:
+      preferred: youtube_api_mcp
+      fallback: web_search_site
+    pre_processing:                      # Optional — NotebookLM enrichment
+      preferred: notebooklm_mcp
+      fallback: skip
+    extraction:
+      preferred: youtube_transcript_mcp
+      fallback: web_fetch
+    credentials:
+      youtube_api_key: env:YOUTUBE_API_KEY
+    quality_threshold: 3
+    seed_channels: []                    # e.g., ["@ChannelName"]
+
+  twitter:
+    discovery:
+      preferred: twitter_mcp
+      fallback: web_search_site
+    extraction:
+      preferred: twitter_mcp
+      fallback: web_fetch
+    credentials:
+      twitterapi_key: env:TWITTERAPI_KEY
+    quality_threshold: 4                 # Higher bar for tweets
+    seed_accounts: []                    # e.g., ["@expert_handle"]
+
+# -----------------------------------------------------------------------------
+# MCP server requirements
+# -----------------------------------------------------------------------------
+# The kb-review meta-skill checks these on startup and reports service status.
+# required: true → blocks execution if unavailable
+# required: false → falls back gracefully
+# -----------------------------------------------------------------------------
+mcp_servers:
+  fast_io:
+    description: "Cloud KB storage (notes, search, RAG, worklog)"
+    required: true
+    check_tool: "workspace/read-note"
+    credentials:
+      - env: FASTIO_TOKEN
+        description: "Fast.io API token"
+        how_to_get: "https://fast.io/dashboard → API Keys, or run `fastio auth login`"
+
+  mem0:
+    description: "Semantic working memory for cross-session insights"
+    required: false
+    lazy_auth: true                        # Do NOT test at startup — defer to first actual use
+    check_tool: "mem0/search"              # Used only if lazy_auth is overridden
+    credentials:
+      - env: MEM0_API_KEY
+        description: "mem0 API key"
+        how_to_get: "https://app.mem0.ai/dashboard → API Keys"
+    notes: >
+      mem0 uses OAuth with rate-limited daily auth attempts. lazy_auth prevents
+      burning auth limits on sessions that never need mem0. First real call
+      determines availability for the session. Failed writes buffer to
+      {project_folder}/mem0-pending.md; flush via kb-refresh --flush-mem0.
+
+  scholar_gateway:
+    description: "Peer-reviewed literature semantic search"
+    required: false
+    check_tool: "mcp__claude_ai_Scholar_Gateway__semanticSearch"
+    credentials: []
+
+  # Uncomment and configure additional servers as needed:
+  #
+  # youtube_api:
+  #   description: "YouTube search and video metadata"
+  #   required: false
+  #   check_tool: "youtube/search"
+  #   credentials:
+  #     - env: YOUTUBE_API_KEY
+  #       how_to_get: "https://console.cloud.google.com → YouTube Data API v3"
+  #
+  # youtube_transcript:
+  #   description: "YouTube transcript extraction (yt-dlp)"
+  #   required: false
+  #   check_tool: "youtube-transcript/get_transcript"
+  #   credentials: []
+  #
+  # notebooklm:
+  #   description: "NotebookLM pre-processing for YouTube content"
+  #   required: false
+  #   check_tool: "notebooklm/list_notebooks"
+  #   credentials:
+  #     - env: GOOGLE_COOKIES
+  #       how_to_get: "Export Google cookies; see notebooklm-mcp README"
+  #
+  # twitter:
+  #   description: "Twitter/X search and thread retrieval"
+  #   required: false
+  #   check_tool: "twitter/search_tweets"
+  #   credentials:
+  #     - env: TWITTERAPI_KEY
+  #       how_to_get: "https://twitterapi.io → Dashboard → API Key"
+
+# -----------------------------------------------------------------------------
+# Cross-project relationships (optional)
+# -----------------------------------------------------------------------------
+cross_project_links: []
+
+# -----------------------------------------------------------------------------
+# Staleness thresholds
+# -----------------------------------------------------------------------------
+staleness:
+  stale_days: 30                        # Domain is STALE after this many days
+  aging_days: 7                         # Domain is AGING after this many days
+  unreviewed_days: 30                   # Domain is UNREVIEWED if no assessment in this many days
