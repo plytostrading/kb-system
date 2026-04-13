@@ -173,11 +173,13 @@ you add upgrades the quality of a specific source type:
 | mem0 | Cross-session semantic memory | No — system works without it |
 | Scholar Gateway | Academic paper discovery | No — falls back to web search |
 
-## Architecture
+## Documentation
 
-For the full system design — persistence stack, skill architecture, source adapter
-pipeline, note templates, lint categories, and design decisions — see
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+- **[User Guide](docs/USER-GUIDE.md)** — Complete installation instructions, manifest
+  reference, usage examples, troubleshooting, and command reference (Linux and macOS)
+- **[Architecture](docs/ARCHITECTURE.md)** — Full system design: persistence stack,
+  skill architecture, source adapter pipeline, note templates, lint categories, and
+  design decisions
 
 ## License
 
