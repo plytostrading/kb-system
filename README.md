@@ -180,6 +180,8 @@ you add upgrades the quality of a specific source type:
 - **[Architecture](docs/ARCHITECTURE.md)** — Full system design: persistence stack,
   skill architecture, source adapter pipeline, note templates, lint categories, and
   design decisions
+- **[Product Strategy](docs/product/)** — Market trajectory, MCP-native architecture,
+  business models, and knowledge graph monetization design
 
 ## License
 
