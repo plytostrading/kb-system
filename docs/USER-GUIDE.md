@@ -934,15 +934,18 @@ empty sections) are reported but not auto-fixed.
 
 ### Flushing the mem0 pending queue
 
-If mem0 was unavailable during previous sessions, insights are buffered in
-Fast.io. To flush them:
+If mem0 was not authenticated during previous sessions, insights are buffered
+in Fast.io (`mem0-pending.md`). The queue is flushed **automatically** — once
+you authenticate mem0, the next `kb-review` or `kb-refresh` run detects the
+data tools and drains the queue as part of its normal cycle.
+
+To flush manually without running a full refresh:
 
 ```
 /kb-refresh --project my-project --flush-mem0
 ```
 
-This attempts to reconnect to mem0 and push all buffered entries. If mem0 is
-still unavailable, it reports the queue size and skips.
+If mem0 is not authenticated, it reports the queue size and skips.
 
 ---
 

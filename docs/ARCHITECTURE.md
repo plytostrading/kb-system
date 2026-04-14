@@ -262,14 +262,22 @@ via `workspace/update-note`. Each pending entry has this format:
 - Content: "[{project_name}] {the mem0 entry text}"
 ```
 
-The pending queue is flushed by `kb-refresh --flush-mem0`:
+The pending queue is flushed **automatically** by `kb-refresh` whenever
+mem0 data tools are available. Since kb-refresh runs as the first step of
+every `kb-review` orchestration, this means: the moment you authenticate
+mem0, the very next review cycle drains the queue with no manual action.
+
+The flush can also be triggered in isolation via `kb-refresh --flush-mem0`.
+
+Flush behavior:
 1. Checks mem0 data tool availability (zero-cost registry check)
-2. If not authenticated → reports "mem0 not authenticated — flush skipped"
+2. If not authenticated → skips silently (Category 9 lint reports the count)
 3. If authenticated → reads `mem0-pending.md`, flushes all entries, clears queue
 4. If a call fails mid-flush → stops, reports partial progress
 
-This ensures **zero data loss** — insights are captured in Fast.io immediately
-and promoted to mem0 when the user has completed authentication.
+This ensures **zero data loss and eventual delivery** — insights are
+captured in Fast.io immediately and promoted to mem0 automatically during
+the next review cycle after authentication.
 
 ### 3.3 Obsidian — Local Viewing Layer (optional)
 

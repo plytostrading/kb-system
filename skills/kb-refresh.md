@@ -157,8 +157,8 @@ INDEX entries without notes → mark as `status=missing_file`.
 **How:** `workspace/read-note` on `{project_folder}/mem0-pending.md`. Count
 `## Pending:` sections.
 **Severity:** Info (if ≤5 entries), Warning (if >5 entries)
-**Auto-fix with --flush-mem0:** See Step 5 below.
-**Without --flush-mem0:** Report count and suggest running with `--flush-mem0`.
+**Auto-fix:** Flushed automatically in Step 5 when mem0 is available.
+Can also be triggered in isolation via `--flush-mem0`.
 
 ### Step 3: Report
 
@@ -213,18 +213,24 @@ If `--fix` was passed:
 2. Re-run affected lint categories to verify
 3. Report what was fixed and what remains
 
-### Step 5: Flush mem0 Pending Queue (if --flush-mem0)
+### Step 5: Flush mem0 Pending Queue (automatic)
 
-If `--flush-mem0` was passed:
+This step runs **automatically** whenever `mem0_available = true`. It also
+runs in isolation when `--flush-mem0` is passed. This ensures the pending
+queue is drained as part of routine review cycles — no manual intervention
+needed once mem0 is authenticated.
 
 1. Read `{project_folder}/mem0-pending.md` via `workspace/read-note`
-2. If no pending entries → report "Nothing to flush" and skip
-3. If not `mem0_available` → report "mem0 not authenticated — {N} entries
-   remain in queue. Complete mem0 authentication first." Skip remaining.
+2. If no pending entries → skip silently (nothing to report)
+3. If not `mem0_available` →
+   - If `--flush-mem0` was explicitly passed: report "mem0 not authenticated
+     — {N} entries remain in queue. Complete mem0 authentication first."
+   - Otherwise: skip silently (Category 9 lint already reported the count)
 4. For each `## Pending:` section, extract the content and store in mem0:
    - Tag with the project name from the `Content:` field
    - On success → mark entry as flushed
-   - On failure mid-flush → stop, report partial progress
+   - On failure mid-flush → set `mem0_available = false`, stop, report
+     partial progress
 5. After all entries are flushed, clear `mem0-pending.md` via
    `workspace/update-note` (replace with empty marker):
 
