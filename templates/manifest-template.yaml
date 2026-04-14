@@ -125,17 +125,17 @@ mcp_servers:
   mem0:
     description: "Semantic working memory for cross-session insights"
     required: false
-    lazy_auth: true                        # Do NOT test at startup — defer to first actual use
-    check_tool: "mem0/search"              # Used only if lazy_auth is overridden
     credentials:
       - env: MEM0_API_KEY
         description: "mem0 API key"
         how_to_get: "https://app.mem0.ai/dashboard → API Keys"
     notes: >
-      mem0 uses OAuth with rate-limited daily auth attempts. lazy_auth prevents
-      burning auth limits on sessions that never need mem0. First real call
-      determines availability for the session. Failed writes buffer to
-      {project_folder}/mem0-pending.md; flush via kb-refresh --flush-mem0.
+      mem0 uses OAuth with rate-limited auth attempts. Skills NEVER call
+      authenticate — they check whether mem0 data tools exist in the tool
+      registry (zero-cost local check). If data tools exist, mem0 is
+      authenticated and usable. If not, all mem0 usage is skipped and writes
+      are buffered to {project_folder}/mem0-pending.md. Authentication is
+      user-initiated only. Flush buffered writes via kb-refresh --flush-mem0.
 
   scholar_gateway:
     description: "Peer-reviewed literature semantic search"

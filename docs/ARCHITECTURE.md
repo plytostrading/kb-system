@@ -228,60 +228,33 @@ when you explicitly ask for it.
 - mem0 = the researcher's notebook (fast recall, semantic search, cross-cutting insights)
 - Read the library to learn; consult the notebook to remember what you learned
 
-**Lazy auth — two-layer optimization:**
+**Zero-cost availability check (no auth attempts):**
 
-mem0 uses OAuth flows with rate-limited daily authentication attempts. The
-system minimizes auth attempts with two complementary mechanisms:
+mem0 uses OAuth with rate-limited authentication attempts. Repeated auth
+attempts cause account lockouts. The system generates **zero auth attempts**
+from the skill layer by using a tool-registry check instead of probing:
 
-**Layer 1: Persistent cooldown file (cross-session, cross-skill)**
+**How it works:** Each skill checks whether mem0 **data tools** (e.g.
+`mcp__mem0-mcp__search`, `mcp__mem0-mcp__add`) exist as callable tools:
 
-A local file `.claude/mem0-cooldown` records the ISO-8601 timestamp of the
-last auth failure. Before any mem0 call, every skill checks this file:
+- **Data tools exist** → mem0 is authenticated. Use normally.
+- **Only `authenticate`/`complete_authentication` exist** → mem0 is NOT
+  authenticated. Skip all mem0 usage silently. Buffer writes.
 
-- If it exists and the timestamp is within the last **23 hours** → set
-  `mem0_status = "unavailable"` immediately, make zero mem0 calls.
-- If it exists but older than 23 hours → ignore it (cooldown expired).
-- If it doesn't exist → no prior failure on record.
+This is a local tool-registry lookup — zero network traffic, zero auth
+attempts. Skills **never** call `authenticate` or `complete_authentication`.
+Authentication is a user-initiated action only.
 
-On auth failure: write `{timestamp} > .claude/mem0-cooldown`.
-On auth success: delete `.claude/mem0-cooldown` (clears stale cooldown).
-
-Why 23 hours, not 24: provides a 1-hour daily retry window so the system
-self-heals without manual intervention.
-
-**Layer 2: Cross-skill status propagation (within an orchestration run)**
-
-When `kb-review` orchestrates sub-skills, it tracks a running
-`mem0_resolved_status`. After the first sub-skill resolves mem0 status
-(via probe or cooldown), kb-review passes `--mem0-status {value}` to all
-subsequent sub-skills. They adopt the status directly — zero probes.
-
-**Combined effect:**
-
-| Scenario | Auth attempts |
-|----------|---------------|
-| First run of the day, mem0 reachable | 1 (probe succeeds, propagated to rest) |
-| First run of the day, mem0 unreachable | 1 (probe fails, cooldown written) |
-| Subsequent runs same day, mem0 still down | 0 (cooldown file blocks all probes) |
-| Run after cooldown expires (~23h later) | 1 (retry, either succeeds or re-cools) |
-
-**Resolution priority chain** (each skill, first match wins):
-1. `--mem0-status` argument → adopt directly
-2. `.claude/mem0-cooldown` within 23h → `unavailable`, no probe
-3. Neither → `untested`, first mem0 call probes
-
-Services with `lazy_auth: true` in the manifest are **not tested during the
-prerequisites check**. The status is determined lazily by the chain above.
-Once resolved:
-- Reads are silently skipped when unavailable (skill proceeds without recall).
-- Writes are buffered (see write-through buffer below).
-- Final report includes: `mem0: {available|unavailable} — {N} writes buffered`
+If mem0 is authenticated but a data call fails at runtime (timeout, rate
+limit), the skill sets `mem0_available = false` for the rest of that run
+and buffers remaining writes. No cooldown files or cross-skill propagation
+needed — each skill independently checks the tool registry.
 
 **Write-through buffer:**
 
-When a mem0 write fails (or `mem0_status` is already `"unavailable"`), the
-entry is appended to `{project_folder}/mem0-pending.md` in Fast.io via
-`workspace/update-note`. Each pending entry has this format:
+When mem0 is not available (not authenticated, or runtime failure), write
+operations are buffered to `{project_folder}/mem0-pending.md` in Fast.io
+via `workspace/update-note`. Each pending entry has this format:
 
 ```markdown
 ## Pending: {date} — {source_id or context}
@@ -290,13 +263,13 @@ entry is appended to `{project_folder}/mem0-pending.md` in Fast.io via
 ```
 
 The pending queue is flushed by `kb-refresh --flush-mem0`:
-1. Reads `mem0-pending.md` from Fast.io
-2. Attempts the first mem0 write as a connectivity test
-3. On success: flushes all entries, then clears the queue
-4. On failure: reports "mem0 still unreachable" with entry count
+1. Checks mem0 data tool availability (zero-cost registry check)
+2. If not authenticated → reports "mem0 not authenticated — flush skipped"
+3. If authenticated → reads `mem0-pending.md`, flushes all entries, clears queue
+4. If a call fails mid-flush → stops, reports partial progress
 
 This ensures **zero data loss** — insights are captured in Fast.io immediately
-and promoted to mem0 when the service becomes available again.
+and promoted to mem0 when the user has completed authentication.
 
 ### 3.3 Obsidian — Local Viewing Layer (optional)
 
@@ -1089,8 +1062,8 @@ this section and produces a service status report on every invocation.
 The `kb-review` meta-skill performs a service check on every invocation
 (see the Prerequisites Check in `kb-review.md`). It:
 1. Checks each `mcp_servers` entry from the manifest
-2. For services with `lazy_auth: true`: skips the check, reports status as
-   `◌ lazy (will try on first use)` — see Section 3.2 for the lazy auth design
+2. For mem0: checks tool registry for data tools (zero-cost, zero auth
+   attempts) — see Section 3.2. Reports as available or "not authenticated"
 3. For all other services: tests connectivity via the `check_tool`
 4. Verifies env vars are set for credentialed services
 5. Reports full status table with setup instructions for anything missing
@@ -1126,7 +1099,5 @@ upgrades one or more source adapters from fallback to preferred path.
 | 2026-04-13 | NotebookLM as YouTube pre-processing step | Raw transcripts lose semantic structure; NotebookLM provides citation-backed claims, cross-source synthesis, and gap identification. Optional phase — falls back to direct transcript when unavailable. One notebook per project-domain accumulates cross-source context over time |
 | 2026-04-13 | Three-phase adapter pipeline (discovery → pre-processing → extraction) | Pre-processing is an optional semantic enrichment step between discovery and extraction. Currently only YouTube uses it (via NotebookLM), but the pattern is extensible to other source types. `fallback: skip` preserves graceful degradation |
 | 2026-04-13 | Extracted KB system to standalone repo | KB system is topic-agnostic and serves multiple projects. Standalone repo with symlink-based installation into consuming projects. Skills symlinked into .claude/skills/, architecture doc symlinked into .claude/kb-docs/. Single .kb-link config file per consuming project stores relative path to KB repo |
-| 2026-04-13 | Lazy auth for mem0 | mem0 OAuth burns rate-limited daily auth attempts. Lazy auth defers connectivity test to first actual use, caches result for session (untested → available/unavailable), makes zero further attempts once failed. Prevents auth exhaustion on sessions that never need mem0 |
 | 2026-04-13 | Write-through buffer for mem0 | Failed mem0 writes buffer to Fast.io `{project_folder}/mem0-pending.md` instead of being lost. Queue flushed by `kb-refresh --flush-mem0`. Category 9 lint monitors queue depth. Zero data loss even with prolonged mem0 outage |
-| 2026-04-13 | Persistent cooldown file for mem0 | `.claude/mem0-cooldown` records last auth failure timestamp. All skills check this before probing — if within 23h, skip entirely (zero attempts). 23h window (not 24h) gives a 1-hour daily retry so system self-heals. Reduces auth attempts from N-per-session to at most 1-per-day |
-| 2026-04-13 | Cross-skill mem0 status propagation | kb-review passes `--mem0-status` to sub-skills after first resolution. Eliminates redundant probes within a single orchestration run. Combined with cooldown file: 0-1 auth attempts per day regardless of session count |
+| 2026-04-14 | Zero-cost mem0 availability (replaces lazy auth, cooldown file, status propagation) | Previous approach (lazy auth + cooldown file + cross-skill propagation) still caused account lockouts because probe calls and MCP server connection-level auth accumulated. New approach: skills check the tool registry for mem0 data tools — a local lookup with zero network traffic, zero auth attempts. If data tools exist → authenticated, use freely. If only authenticate/complete_authentication exist → not authenticated, skip entirely. Authentication is user-initiated only. Removed: cooldown files, `--mem0-status` argument, cross-skill propagation, probing logic |

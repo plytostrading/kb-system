@@ -232,15 +232,6 @@ KB System repo lives on your filesystem). Add these lines to your project's
 .claude/kb-docs/
 ```
 
-**Important:** The `.claude/mem0-cooldown` file (created automatically when
-mem0 auth fails) is also machine-local and should not be committed. It's a
-small file in `.claude/` which is typically already gitignored. If your
-`.claude/` directory is tracked, also add:
-
-```gitignore
-.claude/mem0-cooldown
-```
-
 ### Step 4: Verify the installation
 
 Open Claude Code in your project directory and check that the skills are
@@ -516,18 +507,17 @@ mcp_servers:
   mem0:
     description: "Semantic working memory"
     required: false                 # System works without it
-    lazy_auth: true                 # Don't test at startup (see below)
-    check_tool: "mem0/search"
     credentials:
       - env: MEM0_API_KEY
         how_to_get: "https://app.mem0.ai/dashboard → API Keys"
 ```
 
-**About `lazy_auth`:** Some services (like mem0) use OAuth flows with
-rate-limited daily authentication attempts. Setting `lazy_auth: true`
-prevents the system from burning auth attempts just to check connectivity.
-The service is tested on first actual use, and the result is cached — for
-the rest of the session and across sessions (via a cooldown file).
+**About mem0 authentication:** mem0 uses OAuth with rate-limited auth
+attempts. KB System skills **never** call authenticate automatically — they
+check the tool registry for mem0 data tools (a zero-cost local check). If
+mem0 is authenticated and data tools are available, they're used normally.
+If not, all mem0 usage is silently skipped and writes are buffered to
+`mem0-pending.md`. Authentication is always user-initiated.
 
 #### `staleness` section
 
@@ -826,12 +816,13 @@ layer for "what did we learn about X across all sources?"
 
 **Environment variable:** `MEM0_API_KEY`
 
-**Note on rate limiting:** mem0 has rate-limited daily authentication
-attempts. KB System handles this automatically with a lazy auth pattern —
-it only attempts authentication when actually needed (never speculatively)
-and caches failures for 23 hours to avoid burning your daily limit. Failed
-writes are buffered to Fast.io and flushed automatically when mem0 becomes
-available again.
+**Note on authentication:** mem0 uses OAuth with rate-limited auth
+attempts. KB System skills **never** attempt to authenticate automatically
+— they check the tool registry for data tools (a zero-cost local check).
+If mem0 hasn't been authenticated by the user, all mem0 usage is silently
+skipped and writes are buffered to Fast.io (`mem0-pending.md`). To
+authenticate, use the mem0 MCP server's authenticate flow manually. Once
+authenticated, skills will detect the data tools and use mem0 normally.
 
 ### Scholar Gateway (optional — academic papers)
 
@@ -1051,17 +1042,21 @@ cd /path/to/kb-system
 2. Is the token valid? Try `fastio auth check` if you have the CLI
 3. Does the workspace exist? Check at [fast.io](https://fast.io)
 
-### "mem0 unavailable" on every run
+### "mem0 not authenticated" on every run
 
-**Symptom:** mem0 always shows as unavailable, even after your daily limit
-should have reset.
+**Symptom:** mem0 always shows as "not authenticated" in the service status.
 
-**Check:** The cooldown file may be stale. Delete it:
-```bash
-rm .claude/mem0-cooldown
-```
+**Cause:** mem0 uses OAuth. The skills check for mem0 data tools in the
+tool registry — if only `authenticate`/`complete_authentication` tools
+exist, mem0 hasn't completed its OAuth flow.
 
-The next run will attempt a fresh authentication probe.
+**Fix:** Authenticate mem0 manually. Ask Claude Code to run the mem0
+authentication flow, then complete it in your browser. Once done, mem0
+data tools will appear and skills will use them automatically.
+
+**Note:** Skills never call authenticate automatically — this prevents the
+account lockouts that occur with rate-limited OAuth. Authentication is
+always user-initiated.
 
 ### Symlinks break after git pull
 
@@ -1189,7 +1184,6 @@ brew install python3
 | `--project` | manifest name | required | Which project |
 | `--scope` | `all`, domain name(s) | `all` | Limit to specific domains |
 | `--source` | source ID | *(none)* | Absorb a specific source by ID |
-| `--mem0-status` | `available`, `unavailable` | *(auto)* | Override mem0 status (set by orchestrator) |
 
 ### `/kb-assess` — Assessment
 
@@ -1202,4 +1196,3 @@ brew install python3
 | `--project` | manifest name | required | Which project |
 | `--scope` | `all`, domain name(s) | `all` | Limit to specific domains |
 | `--cross-project` | *(flag)* | off | Surface insights from other projects |
-| `--mem0-status` | `available`, `unavailable` | *(auto)* | Override mem0 status (set by orchestrator) |

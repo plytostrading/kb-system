@@ -21,9 +21,6 @@ knowledge mesh, and detect contradictions.
 - `--project`: **required** — project name (loads manifest from `.claude/kb-projects/`)
 - `--scope`: `all` (default) or comma-separated domain names
 - `--source`: absorb a specific source by ID (skips INDEX.md lookup)
-- `--mem0-status`: `available` or `unavailable` — passed by kb-review orchestrator
-  to skip redundant auth probes (see mem0 Session State below)
-
 ## Step 0: Load Manifest
 
 Read `.claude/kb-projects/{project}.yaml`. Extract:
@@ -31,47 +28,28 @@ Read `.claude/kb-projects/{project}.yaml`. Extract:
 - `project.project_folder` — Fast.io folder path
 - `project.name` — for mem0 tagging
 
-## mem0 Session State
+## mem0 Availability
 
-mem0 uses lazy auth (see `lazy_auth: true` in the manifest). **Do NOT test
-mem0 connectivity at the start.** The goal is **at most one auth attempt per
-day** across all sessions and skill invocations.
+mem0 is optional. **NEVER call `authenticate` or `complete_authentication`.**
+Authentication is a user-initiated action only.
 
-### Determining initial mem0_status
+At the start of this skill, determine `mem0_available` by checking the tool
+registry:
 
-Resolve `mem0_status` using this priority chain (first match wins):
+- If mem0 **data tools** (e.g. `mcp__mem0-mcp__search`, `mcp__mem0-mcp__add`,
+  or similar) exist as callable tools → `mem0_available = true`.
+- If the only mem0 tools are `authenticate` / `complete_authentication`
+  → `mem0_available = false`. The MCP server is connected but the user
+  has not completed OAuth. **Do not attempt to fix this. Do not call
+  authenticate. Skip all mem0 usage silently.**
 
-1. **`--mem0-status` argument** (passed by kb-review orchestrator):
-   If present, adopt it directly — no probe needed. This is how the
-   orchestrator shares the result of an earlier skill's probe.
+This check is local (tool registry lookup) and generates **zero network
+traffic, zero auth attempts.**
 
-2. **Cooldown file** (`.claude/mem0-cooldown` in the project root):
-   Read this file. If it exists and contains a timestamp within the last
-   23 hours → set `mem0_status = "unavailable"` immediately. **Make zero
-   mem0 calls.** The cooldown means a prior session already failed today.
-
-   Why 23 hours, not 24: gives a 1-hour retry window each day so the
-   system self-heals without manual intervention.
-
-3. **Neither present** → set `mem0_status = "untested"`. The first actual
-   mem0 call will probe connectivity (see below).
-
-### On first mem0 call (when mem0_status == "untested")
-
-- Attempt the call:
-  - Success → set `mem0_status = "available"`, proceed normally
-  - Failure (auth error, timeout) → set `mem0_status = "unavailable"`,
-    **write cooldown file**: `echo {ISO-8601 timestamp} > .claude/mem0-cooldown`
-- Once `unavailable`, **make zero further mem0 calls** for the rest of this
-  invocation.
-- When a mem0 write fails, buffer the entry to `{project_folder}/mem0-pending.md`
-  in Fast.io (see write-through buffer below).
-
-### On skill completion
-
-If this skill resolved `mem0_status` from `"untested"` to a definite state,
-report the resolved status so the orchestrator (kb-review) can propagate it
-to subsequent sub-skills via `--mem0-status`.
+If `mem0_available = true` but a data call fails at runtime (timeout, rate
+limit, server error), set `mem0_available = false` for the rest of this
+skill run. Do not retry. Buffer any pending writes to
+`{project_folder}/mem0-pending.md`.
 
 ## Execution Flow
 
@@ -260,27 +238,26 @@ For each potential contradiction:
   - The key difference
   - Status: `pending` (never auto-resolve)
 
-**Store the contradiction in mem0** (if `mem0_status != "unavailable"`):
+**Store the contradiction in mem0** (if `mem0_available`):
 
-Attempt to store in mem0 (tagged with project name):
+Prepare the entry (tagged with project name):
 ```
 "[{project_name}][CONTRADICTION] {source_A} claims X but {source_B} claims Y.
 Key difference: {what differs}. Domain: {domain}.
 Affects: {which part of our project}."
 ```
 
-If this is the first mem0 call and it fails → set `mem0_status = "unavailable"`.
-**Buffer the entry** by appending to `{project_folder}/mem0-pending.md` via
-`workspace/update-note`:
+**If `mem0_available`:** Store directly. If the call fails, set
+`mem0_available = false` and buffer this entry instead.
+
+**If not `mem0_available`:** Buffer by appending to
+`{project_folder}/mem0-pending.md` via `workspace/update-note`:
 
 ```markdown
 ## Pending: {date}
 - Type: contradiction
 - Content: "[{project_name}][CONTRADICTION] {source_A} claims X but {source_B} claims Y. ..."
 ```
-
-If `mem0_status` is already `"unavailable"`, skip the mem0 call entirely and
-go straight to the buffer.
 
 #### 2d. Cross-Reference Building (Bidirectional)
 
@@ -325,9 +302,10 @@ Bad: "[quant-weak-signal] LW2004 is about covariance estimation."
 
 Each entry should connect the source's claims to our project.
 
-**If `mem0_status == "available"`:** Store directly in mem0.
+**If `mem0_available`:** Store directly. If a call fails, set
+`mem0_available = false` and buffer this + all subsequent entries.
 
-**If `mem0_status == "unavailable"`:** Buffer all entries to
+**If not `mem0_available`:** Buffer all entries to
 `{project_folder}/mem0-pending.md` via `workspace/update-note`. Append each
 insight as a pending entry:
 
@@ -337,12 +315,8 @@ insight as a pending entry:
 - Content: "[{project_name}] {insight text}"
 ```
 
-**If `mem0_status == "untested"`:** Attempt the first write. On success,
-set `mem0_status = "available"` and continue. On failure, set
-`mem0_status = "unavailable"` and buffer this entry + all subsequent entries.
-
-The pending queue is flushed by `kb-refresh --flush-mem0` when mem0 becomes
-available again (e.g., after the daily auth limit resets).
+The pending queue is flushed by `kb-refresh --flush-mem0` when the user
+has completed mem0 authentication and data tools are available.
 
 ### Step 3: Update Domain Synthesis
 
@@ -390,14 +364,14 @@ Contradictions detected: {N}
 
 Domain syntheses updated: {list}
 mem0 insights stored: {N stored} ({N buffered} buffered to mem0-pending.md)
-mem0 status: {available|unavailable (reason)|untested (no mem0 calls needed)}
+mem0: {available|not authenticated|unavailable (runtime failure)}
 ```
 
 Append work log via `worklog/append`:
 ```
 [{project}] Absorption complete. {N} sources absorbed ({N} paper, {N} youtube,
 {N} twitter, {N} blog). {N} cross-refs created. {N} contradictions detected.
-mem0: {available|unavailable}. {N} stored, {N} buffered to mem0-pending.md.
+mem0: {available|not authenticated|unavailable}. {N} stored, {N} buffered.
 ```
 
 ## Quality Standards for Source Notes

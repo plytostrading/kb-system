@@ -19,8 +19,6 @@ assessment with severity-rated findings.
 
 - `--project`: **required** — project name (loads manifest from `.claude/kb-projects/`)
 - `--scope`: `all` (default) or comma-separated domain names
-- `--mem0-status`: `available` or `unavailable` — passed by kb-review orchestrator
-  to skip redundant auth probes (see mem0 Session State below)
 - `--cross-project`: when set, mem0 queries omit the project tag to surface
   insights from all projects. Also enables a cross-project relevance scan
   in the assessment output (see Layer 1 below).
@@ -32,39 +30,26 @@ Read `.claude/kb-projects/{project}.yaml`. Extract:
 - `project.project_folder` — Fast.io folder path
 - `domains` — with `code_paths` and `review_checklist` per domain
 
-## mem0 Session State
+## mem0 Availability
 
-mem0 uses lazy auth (see `lazy_auth: true` in the manifest). **Do NOT test
-mem0 connectivity at the start.** The goal is **at most one auth attempt per
-day** across all sessions and skill invocations.
+mem0 is optional. **NEVER call `authenticate` or `complete_authentication`.**
+Authentication is a user-initiated action only.
 
-### Determining initial mem0_status
+At the start of this skill, determine `mem0_available` by checking the tool
+registry:
 
-Resolve `mem0_status` using this priority chain (first match wins):
+- If mem0 **data tools** (e.g. `mcp__mem0-mcp__search`, `mcp__mem0-mcp__add`,
+  or similar) exist as callable tools → `mem0_available = true`.
+- If the only mem0 tools are `authenticate` / `complete_authentication`
+  → `mem0_available = false`. **Do not call authenticate. Skip all mem0
+  usage silently.**
 
-1. **`--mem0-status` argument** (passed by kb-review orchestrator):
-   If present, adopt it directly — no probe needed.
+This check is local (tool registry lookup) and generates **zero auth
+attempts.**
 
-2. **Cooldown file** (`.claude/mem0-cooldown` in the project root):
-   If it exists and contains a timestamp within the last 23 hours →
-   set `mem0_status = "unavailable"` immediately. Make zero mem0 calls.
-
-3. **Neither present** → set `mem0_status = "untested"`. First actual
-   mem0 call will probe connectivity.
-
-### On first mem0 call (when mem0_status == "untested")
-
-- Attempt the call:
-  - Success → `mem0_status = "available"`
-  - Failure → `mem0_status = "unavailable"`, write cooldown file:
-    `echo {ISO-8601 timestamp} > .claude/mem0-cooldown`
-- Once `unavailable`, make zero further mem0 calls.
-- Failed writes buffer to `{project_folder}/mem0-pending.md` in Fast.io.
-
-### On skill completion
-
-Report resolved `mem0_status` so the orchestrator can propagate it to
-subsequent sub-skills via `--mem0-status`.
+If `mem0_available = true` but a data call fails at runtime, set
+`mem0_available = false` for the rest of this skill run. Buffer pending
+writes to `{project_folder}/mem0-pending.md`.
 
 ## Assessment Modes
 
@@ -105,13 +90,11 @@ For EACH domain, follow this strict read sequence. Do not deviate.
 ### Layer 1: Context (~1,000 tokens)
 
 1. Read `{project_folder}/hot.md` via `workspace/read-note`
-2. Query mem0 for insights related to this domain (**if `mem0_status != "unavailable"`**):
-   - **If `mem0_status == "untested"`:** This is the first mem0 call. Attempt it.
-     On success → set `mem0_status = "available"`. On failure → set
-     `mem0_status = "unavailable"` and skip (proceed without mem0 context).
-   - **If `mem0_status == "available"`:** Query normally.
-   - **If `mem0_status == "unavailable"`:** Skip entirely. Note in assessment:
-     "mem0: unavailable — assessment produced without semantic recall layer."
+2. Query mem0 for insights related to this domain (**if `mem0_available`**):
+   - **If `mem0_available`:** Query normally. If the call fails at runtime,
+     set `mem0_available = false` and proceed without mem0 context.
+   - **If not `mem0_available`:** Skip entirely. Note in assessment:
+     "mem0: not available — assessment produced without semantic recall layer."
    - **Default (isolated):** include `[{project_name}]` tag in query
    - **With `--cross-project`:** omit project tag — surfaces insights from all
      projects. If cross-project insights are found, note them in the assessment
@@ -226,9 +209,10 @@ Literature: {what it should do} ([{source_id}]).
 Severity: {critical|important}."
 ```
 
-**If `mem0_status == "available"`:** Store directly in mem0.
+**If `mem0_available`:** Store directly. If a call fails, set
+`mem0_available = false` and buffer this + all subsequent entries.
 
-**If `mem0_status == "unavailable"`:** Buffer all entries to
+**If not `mem0_available`:** Buffer all entries to
 `{project_folder}/mem0-pending.md` via `workspace/update-note`. Append each
 finding as a pending entry:
 
@@ -239,16 +223,12 @@ finding as a pending entry:
 - Content: "[{project_name}][FINDING-{date}] {domain}: ..."
 ```
 
-**If `mem0_status == "untested"`:** Attempt the first write. On success,
-set `mem0_status = "available"` and continue. On failure, set
-`mem0_status = "unavailable"` and buffer this entry + all subsequent entries.
-
 ### Append work log via `worklog/append`:
 ```
 [{project}] Assessment complete. Mode: {assessment_mode}. Scope: {domains}.
 Findings: {N} critical, {N} important, {N} informational.
 {N} literature gaps identified.
-mem0: {available|unavailable}. {N} findings stored, {N} buffered to mem0-pending.md.
+mem0: {available|not authenticated|unavailable}. {N} findings stored, {N} buffered.
 ```
 
 ## Credit Awareness

@@ -21,8 +21,6 @@ assess the health of the knowledge base and fix what can be fixed automatically.
 - `--fix`: auto-fix issues where possible (default: report only)
 - `--lint-only`: skip staleness check, run lint only
 - `--flush-mem0`: attempt to flush pending mem0 writes from `mem0-pending.md`
-- `--mem0-status`: `available` or `unavailable` — passed by kb-review orchestrator
-  to skip redundant auth probes
 
 ## Step 0: Load Manifest
 
@@ -31,38 +29,24 @@ Read `.claude/kb-projects/{project}.yaml`. Extract:
 - `domains` — domain list
 - `staleness` — threshold configuration (stale_days, aging_days, unreviewed_days)
 
-## mem0 Session State (for --flush-mem0)
+## mem0 Availability (for --flush-mem0)
 
-mem0 uses lazy auth (see `lazy_auth: true` in the manifest). The flush step
-needs mem0 to be available. The goal is **at most one auth attempt per day**.
+mem0 is optional. **NEVER call `authenticate` or `complete_authentication`.**
+Authentication is a user-initiated action only.
 
-### Determining initial mem0_status
+Determine `mem0_available` by checking the tool registry:
 
-Resolve `mem0_status` using this priority chain (first match wins):
+- If mem0 **data tools** (e.g. `mcp__mem0-mcp__search`, `mcp__mem0-mcp__add`,
+  or similar) exist as callable tools → `mem0_available = true`.
+- If the only mem0 tools are `authenticate` / `complete_authentication`
+  → `mem0_available = false`. If `--flush-mem0` was requested, report:
+  "mem0 not authenticated — flush skipped. Run mem0 authentication first."
 
-1. **`--mem0-status` argument** (passed by kb-review orchestrator):
-   If present, adopt it directly — no probe needed.
+This check is local (tool registry lookup) and generates **zero auth
+attempts.**
 
-2. **Cooldown file** (`.claude/mem0-cooldown` in the project root):
-   If it exists and contains a timestamp within the last 23 hours →
-   set `mem0_status = "unavailable"` immediately. If `--flush-mem0` was
-   requested, report "mem0 in cooldown (last failure: {time}) — flush
-   skipped. Retry after {cooldown expiry time}."
-
-3. **Neither present** → set `mem0_status = "untested"`. The flush
-   step's first mem0 call will probe connectivity.
-
-### On first mem0 call (when mem0_status == "untested")
-
-- Success → `mem0_status = "available"`, proceed with flush.
-  **Delete cooldown file** if it exists (successful auth clears cooldown).
-- Failure → `mem0_status = "unavailable"`, write cooldown file:
-  `echo {ISO-8601 timestamp} > .claude/mem0-cooldown`
-  Report flush skipped.
-
-### On skill completion
-
-Report resolved `mem0_status` so the orchestrator can propagate it.
+If `mem0_available = true` but a data call fails at runtime, set
+`mem0_available = false`. Report flush skipped with reason.
 
 ## Execution Flow
 
@@ -219,7 +203,7 @@ Append work log via `worklog/append`:
 ```
 [{project}] Refresh/lint complete. Scope: {domains}. {N} errors, {N} warnings.
 {N} auto-fixed (if --fix). {N} require manual attention.
-mem0 pending: {N} entries. {Flushed N / Flush skipped (reason)}.
+mem0: {available|not authenticated|unavailable}. Pending: {N}. {Flushed N / skipped}.
 ```
 
 ### Step 4: Apply Auto-Fixes (if --fix)
@@ -235,10 +219,8 @@ If `--flush-mem0` was passed:
 
 1. Read `{project_folder}/mem0-pending.md` via `workspace/read-note`
 2. If no pending entries → report "Nothing to flush" and skip
-3. Attempt the first mem0 write as the connectivity test:
-   - Success → set `mem0_status = "available"`, continue
-   - Failure → set `mem0_status = "unavailable"`, report "mem0 still
-     unreachable — {N} entries remain in queue", skip remaining
+3. If not `mem0_available` → report "mem0 not authenticated — {N} entries
+   remain in queue. Complete mem0 authentication first." Skip remaining.
 4. For each `## Pending:` section, extract the content and store in mem0:
    - Tag with the project name from the `Content:` field
    - On success → mark entry as flushed

@@ -54,14 +54,29 @@ From the manifest, extract:
 Before running any phase, verify services from the manifest's `mcp_servers`
 section. For each server:
 
-1. If `lazy_auth: true` is set → **skip connectivity check** (see Lazy Services below)
-2. Otherwise, check if the MCP tool specified in `check_tool` is callable
-3. If `required: true` and unavailable → report setup instructions and **stop**
-4. If `required: false` and unavailable → warn, note which fallback will be used
+1. Check if the MCP tool specified in `check_tool` is callable
+2. If `required: true` and unavailable → report setup instructions and **stop**
+3. If `required: false` and unavailable → warn, note which fallback will be used
 
-For services that need credentials (and are NOT lazy):
+For services that need credentials:
 - Check if the environment variable from `credentials[].env` is set
 - If missing and the service has `how_to_get`, include that in the setup report
+
+### mem0 — Zero-Cost Availability Check
+
+**NEVER call `mcp__mem0-mcp__authenticate` or `complete_authentication`.**
+Authentication is a user-initiated action only.
+
+Check whether mem0 **data tools** (e.g. `mcp__mem0-mcp__search`,
+`mcp__mem0-mcp__add`) exist as callable tools in the tool registry:
+
+- **Data tools exist** → mem0 is authenticated and usable. Report as available.
+- **Only `authenticate`/`complete_authentication` exist** → mem0 is NOT
+  authenticated. Report as "not authenticated" and proceed without mem0.
+  Each sub-skill will independently detect this and skip mem0 / buffer writes.
+
+This check is a local tool-registry lookup — **zero network traffic, zero
+auth attempts.**
 
 **Report the full service status before proceeding:**
 
@@ -70,7 +85,7 @@ KB System — Service Status
 Project: {project_name}
 
   ✓ Fast.io         — connected (workspace: shared-kb)          [REQUIRED]
-  ◌ mem0            — lazy (will try on first use)              [optional, lazy]
+  ✗ mem0            — not authenticated (data tools unavailable) [optional → writes buffered]
   ✓ Scholar Gateway — connected (via Claude.ai integration)     [optional]
   ✗ YouTube API     — YOUTUBE_API_KEY not set                   [optional → WebSearch fallback]
     → Get key: https://console.cloud.google.com → YouTube Data API v3
@@ -80,47 +95,9 @@ Project: {project_name}
   ✗ Twitter MCP     — TWITTERAPI_KEY not set                    [optional → WebSearch fallback]
     → Get key: https://twitterapi.io → Dashboard → API Key
 
-Services available: 4/7 (1 lazy)
-Fallback active for: youtube discovery, youtube pre-processing (skipped), twitter discovery+extraction
+Services available: 4/7
+Fallback active for: mem0 (writes buffered), youtube discovery, youtube pre-processing (skipped), twitter discovery+extraction
 ```
-
-### Lazy Services
-
-Services marked `lazy_auth: true` in the manifest are **NOT tested during
-prerequisites**. This prevents burning daily auth limits on services that
-use OAuth flows with rate-limited authentication attempts.
-
-**Session lifecycle for lazy services:**
-
-1. **First actual use:** The first sub-skill that needs the service attempts
-   a real call. If it succeeds → marked `available` for the rest of the
-   session. If it fails (auth error, timeout, unreachable) → marked
-   `unavailable` for the rest of the session.
-
-2. **No retries within session:** Once marked `unavailable`, no further calls
-   are attempted in this invocation. This prevents burning additional auth
-   attempts on a service that already failed.
-
-3. **Silent degradation on reads:** When a lazy service is unavailable, read
-   operations (e.g., mem0 queries) are skipped. The skill proceeds without
-   that context layer, noting "mem0: unavailable — skipped" in the output.
-
-4. **Write-through buffer on writes:** When a lazy service is unavailable,
-   write operations (e.g., storing insights in mem0) are buffered to
-   `{project_folder}/mem0-pending.md` in Fast.io via `workspace/update-note`.
-   The buffer is flushed by `kb-refresh` when the service becomes available.
-
-5. **Status reported at end:** The final report includes lazy service outcomes:
-   ```
-   Lazy services:
-     mem0 — unavailable (auth timeout), 5 writes buffered to mem0-pending.md
-   ```
-
-**Why lazy auth:** mem0 uses OAuth flows that count against daily authentication
-limits. Testing connectivity on every invocation burns through these limits
-even when the service isn't needed in that session. Lazy auth means you only
-pay the auth cost when you actually use the service — and at most once per
-session.
 
 If any required service is unavailable, stop and provide setup instructions.
 If only optional services are missing, ask the user whether to proceed with
@@ -191,29 +168,24 @@ Proceed? [the user must confirm]
 Invoke sub-skills using the Skill tool in the determined order. Pass `--project`
 and (if set) `--cross-project` to each sub-skill.
 
-**mem0 status propagation:** Track a running `mem0_resolved_status` variable
-(initially empty). After each sub-skill that uses mem0 completes, capture its
-reported `mem0_status`. Pass `--mem0-status {value}` to all subsequent sub-skills.
-This ensures **at most one mem0 auth probe per orchestration run**.
+Each sub-skill independently checks mem0 data tool availability via the tool
+registry (a zero-cost local check). No cross-skill mem0 state propagation
+is needed.
 
 1. **Refresh/Lint** (always first):
-   `Skill("kb-refresh", "--project {name} --scope {scope} [--mem0-status {value}]")`
-   → If refresh resolved mem0_status, capture it.
+   `Skill("kb-refresh", "--project {name} --scope {scope}")`
 
 2. **Discovery** (if needed):
    `Skill("kb-discover", "--project {name} --scope {domains} [--cross-project]")`
-   (Discovery does not use mem0 — no propagation needed.)
 
 3. **Absorption** (if pending sources exist):
-   `Skill("kb-absorb", "--project {name} --scope {domains} [--mem0-status {value}]")`
-   → If absorption resolved mem0_status, capture it.
+   `Skill("kb-absorb", "--project {name} --scope {domains}")`
 
 4. **Assessment** (if needed):
-   `Skill("kb-assess", "--project {name} --scope {domains} [--cross-project] [--mem0-status {value}]")`
+   `Skill("kb-assess", "--project {name} --scope {domains} [--cross-project]")`
 
 Note: `--cross-project` is passed to discovery and assessment (where cross-project
 knowledge adds value) but NOT to absorption or refresh (which are always project-scoped).
-`--mem0-status` is passed to all mem0-using skills (refresh, absorb, assess) once resolved.
 
 ### Step 4: Update Hot Cache
 
@@ -252,7 +224,7 @@ Discovery: {N new sources found}. Absorption: {N sources absorbed}.
 Assessment: {N critical, N important, N informational}.
 Lint: {N issues found, N auto-fixed}.
 Adapters: {which preferred vs fallback paths used}.
-mem0: {available|unavailable}. {N} writes buffered.
+mem0: {available|not authenticated|unavailable}. {N} writes buffered.
 ```
 
 ### Step 6: Report to User
@@ -276,8 +248,8 @@ Open questions requiring your input:
 - {question 1}
 - {question 2}
 
-Lazy services:
-  mem0: {available|unavailable (reason)} — {N} writes buffered to mem0-pending.md
+Optional services:
+  mem0: {available|not authenticated|unavailable} — {N} writes buffered to mem0-pending.md
 ```
 
 ## Credit Awareness
