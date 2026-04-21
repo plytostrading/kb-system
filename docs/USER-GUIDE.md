@@ -512,12 +512,15 @@ mcp_servers:
         how_to_get: "https://app.mem0.ai/dashboard → API Keys"
 ```
 
-**About mem0 authentication:** mem0 uses OAuth with rate-limited auth
-attempts. KB System skills **never** call authenticate automatically — they
-check the tool registry for mem0 data tools (a zero-cost local check). If
-mem0 is authenticated and data tools are available, they're used normally.
-If not, all mem0 usage is silently skipped and writes are buffered to
-`mem0-pending.md`. Authentication is always user-initiated.
+**About mem0 connection:** The recommended path is the official API-key
+HTTP MCP (`https://mcp.mem0.ai/mcp`) — it has no `authenticate` tool and
+no OAuth lockout surface. KB System skills check the tool registry for
+mem0 data tools (a zero-cost local check) and use them normally when
+present. If only `authenticate`/`complete_authentication` tools exist
+(an OAuth-based connector without completed OAuth), all mem0 usage is
+silently skipped and writes are buffered to `mem0-pending.md`. Skills
+**never** call `authenticate` under any circumstances — see the mem0
+setup section for the recommended MCP configuration.
 
 #### `staleness` section
 
@@ -566,10 +569,10 @@ KB System — Service Status
 Project: my-project
 
   ✓ Fast.io         — connected (workspace: shared-kb)       [REQUIRED]
-  ◌ mem0            — lazy (will try on first use)           [optional, lazy]
+  ✓ mem0            — connected (API-key HTTP MCP, 9 data tools) [optional]
   ✓ Scholar Gateway — connected                              [optional]
 
-Services available: 2/3 (1 lazy)
+Services available: 3/3
 
 Project: my-project
 Domain Status:
@@ -809,20 +812,42 @@ mem0 provides fast semantic recall of cross-cutting insights between sessions.
 Without it, the system still works — it just doesn't have a quick-recall
 layer for "what did we learn about X across all sources?"
 
+**Use the official API-key HTTP MCP.** This is the only path we recommend.
+It exposes nine data tools (`add_memory`, `search_memories`, `get_memories`,
+`get_memory`, `update_memory`, `delete_memory`, `delete_all_memories`,
+`delete_entities`, `list_entities`) and has **no `authenticate` tool** —
+there is no OAuth lockout surface. Reference:
+[docs.mem0.ai/platform/mem0-mcp](https://docs.mem0.ai/platform/mem0-mcp).
+
 **Setup:**
 1. Create an account at [app.mem0.ai](https://app.mem0.ai)
-2. Go to Dashboard → API Keys
-3. Create a new key
+2. Dashboard → API Keys → create a key
+3. Install the HTTP MCP into Claude Code:
+   ```
+   npx mcp-add --name mem0-mcp --type http \
+     --url "https://mcp.mem0.ai/mcp" --clients "claude code"
+   ```
+4. Provide the API key when prompted (or set `MEM0_API_KEY` in your
+   environment, depending on the MCP installer's convention)
+5. Restart Claude Code. Run `claude mcp list` to verify `mem0-mcp` is
+   present and the tool registry now includes `mcp__mem0-mcp__add_memory`,
+   `mcp__mem0-mcp__search_memories`, etc.
 
 **Environment variable:** `MEM0_API_KEY`
 
-**Note on authentication:** mem0 uses OAuth with rate-limited auth
-attempts. KB System skills **never** attempt to authenticate automatically
-— they check the tool registry for data tools (a zero-cost local check).
-If mem0 hasn't been authenticated by the user, all mem0 usage is silently
-skipped and writes are buffered to Fast.io (`mem0-pending.md`). To
-authenticate, use the mem0 MCP server's authenticate flow manually. Once
-authenticated, skills will detect the data tools and use mem0 normally.
+**Do NOT use the OAuth-based connector.** Some Claude.ai Connectors or
+third-party wrappers expose mem0 via OAuth, registering only
+`mcp__mem0-mcp__authenticate` and `mcp__mem0-mcp__complete_authentication`
+tools until OAuth completes. Those connectors rate-limit auth attempts
+and can lock the account for days if auth is retried. KB System skills
+**never** call `authenticate`, but even one reflexive "help me fix
+mem0" from a non-KB session can extend a lockout. The API-key HTTP MCP
+above eliminates this failure mode entirely because no `authenticate`
+tool exists to call.
+
+If you see only `authenticate`/`complete_authentication` tools in your
+session, remove the OAuth connector before installing the HTTP MCP —
+see the troubleshooting section "mem0 shows only authenticate tools".
 
 ### Scholar Gateway (optional — academic papers)
 
@@ -934,10 +959,12 @@ empty sections) are reported but not auto-fixed.
 
 ### Flushing the mem0 pending queue
 
-If mem0 was not authenticated during previous sessions, insights are buffered
-in Fast.io (`mem0-pending.md`). The queue is flushed **automatically** — once
-you authenticate mem0, the next `kb-review` or `kb-refresh` run detects the
-data tools and drains the queue as part of its normal cycle.
+If mem0 was unavailable during previous sessions (no data tools in the
+registry), insights are buffered in Fast.io (`mem0-pending.md`). The queue
+is flushed **automatically** — once mem0 data tools are present (install
+the API-key HTTP MCP, see §mem0 setup), the next `kb-review` or
+`kb-refresh` run detects them and drains the queue as part of its normal
+cycle.
 
 To flush manually without running a full refresh:
 
@@ -945,7 +972,8 @@ To flush manually without running a full refresh:
 /kb-refresh --project my-project --flush-mem0
 ```
 
-If mem0 is not authenticated, it reports the queue size and skips.
+If mem0 data tools are not present, it reports the queue size and skips —
+it does not attempt to authenticate.
 
 ---
 
@@ -1045,21 +1073,56 @@ cd /path/to/kb-system
 2. Is the token valid? Try `fastio auth check` if you have the CLI
 3. Does the workspace exist? Check at [fast.io](https://fast.io)
 
-### "mem0 not authenticated" on every run
+### mem0 shows only authenticate tools (OAuth connector installed)
 
-**Symptom:** mem0 always shows as "not authenticated" in the service status.
+**Symptom:** `claude mcp list` shows `mem0-mcp`, but the only mem0 tools
+available in Claude Code sessions are `mcp__mem0-mcp__authenticate` and
+`mcp__mem0-mcp__complete_authentication`. KB service status reports mem0
+as "misconfigured (OAuth connector, no data tools)."
 
-**Cause:** mem0 uses OAuth. The skills check for mem0 data tools in the
-tool registry — if only `authenticate`/`complete_authentication` tools
-exist, mem0 hasn't completed its OAuth flow.
+**Cause:** You have an OAuth-based mem0 connector (e.g. a Claude.ai
+Connector, or a third-party wrapper) instead of the official API-key HTTP
+MCP. The OAuth path:
+- Rate-limits authentication attempts and locks the account when exceeded
+- Does not persist OAuth state reliably across Claude Code sessions, so
+  each new session lands back on only-the-authenticate-tools
+- Creates a recurring temptation for well-meaning agents to "just
+  authenticate" — which is exactly what triggers the lockout
 
-**Fix:** Authenticate mem0 manually. Ask Claude Code to run the mem0
-authentication flow, then complete it in your browser. Once done, mem0
-data tools will appear and skills will use them automatically.
+**Do not attempt to "just log in" to resolve this.** Each `authenticate`
+call consumes a rate-limited attempt; repeat attempts within the
+lockout window extend the penalty rather than clearing it.
 
-**Note:** Skills never call authenticate automatically — this prevents the
-account lockouts that occur with rate-limited OAuth. Authentication is
-always user-initiated.
+**Fix — switch to the official API-key MCP:**
+
+1. Remove the OAuth connector.
+   - If installed via Claude.ai Connectors: Settings → Connectors →
+     mem0 → Remove.
+   - If installed as a local MCP: `claude mcp remove mem0-mcp`.
+2. Get an API key from [app.mem0.ai/dashboard](https://app.mem0.ai/dashboard)
+   → API Keys.
+3. Install the official HTTP MCP:
+   ```
+   npx mcp-add --name mem0-mcp --type http \
+     --url "https://mcp.mem0.ai/mcp" --clients "claude code"
+   ```
+4. Provide the API key when the installer prompts (or export
+   `MEM0_API_KEY` in your environment).
+5. Restart Claude Code. The tool registry should now show
+   `mcp__mem0-mcp__add_memory`, `mcp__mem0-mcp__search_memories`, and the
+   other seven data tools — and no `authenticate` tool at all.
+6. On the next `/kb-review` run, KB System detects the data tools and
+   automatically flushes any writes buffered in `mem0-pending.md` (see
+   commit `6ace9c7`).
+
+**Why the KB skills can't fix this on your behalf:** the skills
+deliberately never call `authenticate`, because doing so would risk
+lockout. Resolution requires changing the MCP server configuration,
+which lives in Claude Code settings (outside this repo).
+
+**Note:** Skills never call authenticate automatically — this prevents
+the account lockouts that occur with rate-limited OAuth. Authentication,
+when it exists at all, is always user-initiated.
 
 ### Symlinks break after git pull
 

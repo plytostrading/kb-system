@@ -130,12 +130,20 @@ mcp_servers:
         description: "mem0 API key"
         how_to_get: "https://app.mem0.ai/dashboard → API Keys"
     notes: >
-      mem0 uses OAuth with rate-limited auth attempts. Skills NEVER call
-      authenticate — they check whether mem0 data tools exist in the tool
-      registry (zero-cost local check). If data tools exist, mem0 is
-      authenticated and usable. If not, all mem0 usage is skipped and writes
-      are buffered to {project_folder}/mem0-pending.md. Authentication is
-      user-initiated only. Flush buffered writes via kb-refresh --flush-mem0.
+      Recommended install: official API-key HTTP MCP at
+      https://mcp.mem0.ai/mcp (see docs.mem0.ai/platform/mem0-mcp). This
+      path has no authenticate tool and no OAuth lockout surface. Install:
+      `npx mcp-add --name mem0-mcp --type http
+      --url "https://mcp.mem0.ai/mcp" --clients "claude code"`. Skills
+      check whether mem0 data tools (add_memory, search_memories, etc.)
+      exist in the tool registry — a zero-cost local lookup. If data
+      tools are present, mem0 is used normally. If only
+      authenticate/complete_authentication tools exist (OAuth connector,
+      not recommended), all mem0 usage is skipped and writes are buffered
+      to {project_folder}/mem0-pending.md. Skills NEVER call authenticate
+      under any circumstance. Flush buffered writes via
+      kb-refresh --flush-mem0 (runs automatically when data tools become
+      available).
 
   scholar_gateway:
     description: "Peer-reviewed literature semantic search"

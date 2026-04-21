@@ -65,15 +65,24 @@ For services that need credentials:
 ### mem0 — Zero-Cost Availability Check
 
 **NEVER call `mcp__mem0-mcp__authenticate` or `complete_authentication`.**
-Authentication is a user-initiated action only.
+Authentication is a user-initiated action only. Repeated auth calls against
+the OAuth connector cause account lockouts that take days to clear.
 
-Check whether mem0 **data tools** (e.g. `mcp__mem0-mcp__search`,
-`mcp__mem0-mcp__add`) exist as callable tools in the tool registry:
+Check whether mem0 **data tools** exist as callable tools in the tool
+registry. The official mem0 MCP (`https://mcp.mem0.ai/mcp`) exposes nine
+data tools: `add_memory`, `search_memories`, `get_memories`, `get_memory`,
+`update_memory`, `delete_memory`, `delete_all_memories`, `delete_entities`,
+`list_entities` — each namespaced under `mcp__mem0-mcp__` in Claude Code.
 
-- **Data tools exist** → mem0 is authenticated and usable. Report as available.
-- **Only `authenticate`/`complete_authentication` exist** → mem0 is NOT
-  authenticated. Report as "not authenticated" and proceed without mem0.
-  Each sub-skill will independently detect this and skip mem0 / buffer writes.
+Classify the mem0 configuration:
+
+- **Any data tool present** (e.g. `mcp__mem0-mcp__add_memory`,
+  `mcp__mem0-mcp__search_memories`) → mem0 is usable. Report as available.
+- **Only `authenticate`/`complete_authentication` present** → the user has
+  the OAuth-based connector and has not completed OAuth. Report as
+  **misconfigured** (not merely "not authenticated") and surface the
+  resolution below. Proceed without mem0; sub-skills will buffer writes.
+- **No mem0 tools at all** → mem0 is not installed. Report as absent.
 
 This check is a local tool-registry lookup — **zero network traffic, zero
 auth attempts.**
@@ -85,7 +94,18 @@ KB System — Service Status
 Project: {project_name}
 
   ✓ Fast.io         — connected (workspace: shared-kb)          [REQUIRED]
-  ✗ mem0            — not authenticated (data tools unavailable) [optional → writes buffered]
+  ⚠ mem0            — misconfigured (OAuth connector, no data tools) [optional → writes buffered]
+    → Recommended fix: switch to API-key MCP. This eliminates the
+      OAuth lockout risk entirely — there is no `authenticate` tool
+      to accidentally call.
+      1. Remove the OAuth connector (Claude.ai → Connectors → mem0 → Remove,
+         or `claude mcp remove mem0-mcp`).
+      2. Get an API key: https://app.mem0.ai/dashboard → API Keys.
+      3. Install the official HTTP MCP:
+           npx mcp-add --name mem0-mcp --type http \
+             --url "https://mcp.mem0.ai/mcp" --clients "claude code"
+      4. Restart Claude Code. Tools like `mcp__mem0-mcp__add_memory`
+         and `mcp__mem0-mcp__search_memories` will then appear.
   ✓ Scholar Gateway — connected (via Claude.ai integration)     [optional]
   ✗ YouTube API     — YOUTUBE_API_KEY not set                   [optional → WebSearch fallback]
     → Get key: https://console.cloud.google.com → YouTube Data API v3
@@ -98,6 +118,10 @@ Project: {project_name}
 Services available: 4/7
 Fallback active for: mem0 (writes buffered), youtube discovery, youtube pre-processing (skipped), twitter discovery+extraction
 ```
+
+If mem0 is reported as **misconfigured** and the user has not addressed it
+in a prior run, surface the resolution block prominently once per
+`/kb-review` invocation so the user has the concrete fix in front of them.
 
 If any required service is unavailable, stop and provide setup instructions.
 If only optional services are missing, ask the user whether to proceed with

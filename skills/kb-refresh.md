@@ -36,11 +36,16 @@ Authentication is a user-initiated action only.
 
 Determine `mem0_available` by checking the tool registry:
 
-- If mem0 **data tools** (e.g. `mcp__mem0-mcp__search`, `mcp__mem0-mcp__add`,
-  or similar) exist as callable tools → `mem0_available = true`.
+- If mem0 **data tools** (e.g. `mcp__mem0-mcp__search_memories`,
+  `mcp__mem0-mcp__add_memory`, `mcp__mem0-mcp__get_memories`, or any of
+  the other seven data tools documented at `https://docs.mem0.ai/platform/mem0-mcp`)
+  exist as callable tools → `mem0_available = true`.
 - If the only mem0 tools are `authenticate` / `complete_authentication`
-  → `mem0_available = false`. If `--flush-mem0` was requested, report:
-  "mem0 not authenticated — flush skipped. Run mem0 authentication first."
+  → `mem0_available = false`. The user has the OAuth-based connector and
+  has not completed OAuth. **Do not call `authenticate`.** If `--flush-mem0`
+  was requested, report: "mem0 not available — flush skipped. Either
+  complete OAuth manually or, preferably, switch to the official API-key
+  HTTP MCP (`https://mcp.mem0.ai/mcp`) to eliminate the OAuth lockout risk."
 
 This check is local (tool registry lookup) and generates **zero auth
 attempts.**

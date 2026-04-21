@@ -228,26 +228,47 @@ when you explicitly ask for it.
 - mem0 = the researcher's notebook (fast recall, semantic search, cross-cutting insights)
 - Read the library to learn; consult the notebook to remember what you learned
 
+**mem0 connection — API-key HTTP MCP is the default:**
+
+There are two ways to connect mem0 to Claude Code. **The recommended path
+is the official API-key HTTP MCP** (`https://mcp.mem0.ai/mcp`,
+documented at `https://docs.mem0.ai/platform/mem0-mcp`). It exposes nine
+data tools and has no `authenticate` tool at all — there is no OAuth
+lockout surface. Install it via:
+
+```
+npx mcp-add --name mem0-mcp --type http --url "https://mcp.mem0.ai/mcp" --clients "claude code"
+```
+
+…and provide an API key from the mem0 Dashboard. This is the path every
+new install should use.
+
+The **alternative path is an OAuth-based connector** (e.g. a Claude.ai
+Connector that wraps mem0). It exposes `authenticate` and
+`complete_authentication` tools and uses rate-limited auth attempts.
+Repeated auth calls against this connector cause account lockouts that
+take days to clear. Skills **never** call `authenticate` or
+`complete_authentication` under any circumstances — authentication is
+a user-initiated action only.
+
 **Zero-cost availability check (no auth attempts):**
 
-mem0 uses OAuth with rate-limited authentication attempts. Repeated auth
-attempts cause account lockouts. The system generates **zero auth attempts**
-from the skill layer by using a tool-registry check instead of probing:
+Each skill checks whether mem0 **data tools** are present in the tool
+registry — a local lookup with zero network traffic and zero auth
+attempts:
 
-**How it works:** Each skill checks whether mem0 **data tools** (e.g.
-`mcp__mem0-mcp__search`, `mcp__mem0-mcp__add`) exist as callable tools:
+- **Any data tool present** (e.g. `mcp__mem0-mcp__add_memory`,
+  `mcp__mem0-mcp__search_memories`) → mem0 is usable. Use normally.
+- **Only `authenticate`/`complete_authentication` present** → the user
+  has the OAuth connector and has not completed OAuth. Skip all mem0
+  usage silently and buffer writes. The recommended resolution is to
+  switch to the API-key HTTP MCP above, which eliminates the lockout
+  surface mechanically.
+- **No mem0 tools at all** → mem0 is not installed. Skip silently.
 
-- **Data tools exist** → mem0 is authenticated. Use normally.
-- **Only `authenticate`/`complete_authentication` exist** → mem0 is NOT
-  authenticated. Skip all mem0 usage silently. Buffer writes.
-
-This is a local tool-registry lookup — zero network traffic, zero auth
-attempts. Skills **never** call `authenticate` or `complete_authentication`.
-Authentication is a user-initiated action only.
-
-If mem0 is authenticated but a data call fails at runtime (timeout, rate
-limit), the skill sets `mem0_available = false` for the rest of that run
-and buffers remaining writes. No cooldown files or cross-skill propagation
+If mem0 is usable but a data call fails at runtime (timeout, rate limit),
+the skill sets `mem0_available = false` for the rest of that run and
+buffers remaining writes. No cooldown files or cross-skill propagation
 needed — each skill independently checks the tool registry.
 
 **Write-through buffer:**
@@ -264,20 +285,21 @@ via `workspace/update-note`. Each pending entry has this format:
 
 The pending queue is flushed **automatically** by `kb-refresh` whenever
 mem0 data tools are available. Since kb-refresh runs as the first step of
-every `kb-review` orchestration, this means: the moment you authenticate
-mem0, the very next review cycle drains the queue with no manual action.
+every `kb-review` orchestration, this means: the moment you install the
+API-key HTTP MCP (or otherwise expose mem0 data tools), the very next
+review cycle drains the queue with no manual action.
 
 The flush can also be triggered in isolation via `kb-refresh --flush-mem0`.
 
 Flush behavior:
 1. Checks mem0 data tool availability (zero-cost registry check)
-2. If not authenticated → skips silently (Category 9 lint reports the count)
-3. If authenticated → reads `mem0-pending.md`, flushes all entries, clears queue
+2. If no data tools present → skips silently (Category 9 lint reports the count)
+3. If data tools present → reads `mem0-pending.md`, flushes all entries, clears queue
 4. If a call fails mid-flush → stops, reports partial progress
 
 This ensures **zero data loss and eventual delivery** — insights are
-captured in Fast.io immediately and promoted to mem0 automatically during
-the next review cycle after authentication.
+captured in Fast.io immediately and promoted to mem0 automatically as
+soon as data tools are present in the registry.
 
 ### 3.3 Obsidian — Local Viewing Layer (optional)
 
@@ -1002,7 +1024,8 @@ TWITTERAPI_KEY=tw_...
 # Fast.io workspace token
 FASTIO_TOKEN=ft_...
 
-# mem0 API key (if using self-hosted, not Claude.ai integration)
+# mem0 API key — required for the official HTTP MCP at https://mcp.mem0.ai/mcp
+# (recommended install; see §3.2). Avoid OAuth-based connectors.
 MEM0_API_KEY=m0_...
 ```
 
@@ -1042,9 +1065,28 @@ This file CAN be committed (no secrets, only variable references).
 }
 ```
 
-Note: Scholar Gateway and mem0 may already be connected via Claude.ai's built-in
-integrations (the `claude_ai_` prefix tools). These use OAuth flows managed by
-Claude.ai itself — no env vars needed.
+Note: Scholar Gateway may already be connected via Claude.ai's built-in
+integrations (the `claude_ai_` prefix tools), which use OAuth flows managed
+by Claude.ai itself — no env vars needed.
+
+**For mem0, prefer the API-key HTTP MCP over any OAuth-based Claude.ai
+Connector.** The OAuth path rate-limits auth attempts and can lock the
+account for days; the API-key path has no `authenticate` tool to call,
+so the lockout failure mode cannot occur. Install with:
+
+```
+npx mcp-add --name mem0-mcp --type http --url "https://mcp.mem0.ai/mcp" --clients "claude code"
+```
+
+or add to `.claude/settings.json`:
+
+```json
+"mem0-mcp": {
+  "type": "http",
+  "url": "https://mcp.mem0.ai/mcp",
+  "headers": { "Authorization": "Bearer ${MEM0_API_KEY}" }
+}
+```
 
 **Layer 3: Project manifest `mcp_servers` section — declares requirements**
 
@@ -1061,7 +1103,7 @@ this section and produces a service status report on every invocation.
 | NotebookLM (community MCP) | `GOOGLE_COOKIES` | Export Google account cookies via browser extension (e.g., EditThisCookie); see PleasePrompto/notebooklm-mcp README for format |
 | NotebookLM (Enterprise API) | — | `gcloud auth login` + Enterprise tier subscription; uses OAuth, not env vars |
 | Twitter/X reads | `TWITTERAPI_KEY` | twitterapi.io → Sign Up → Dashboard → API Key (~$0.15/1K calls) |
-| mem0 | `MEM0_API_KEY` | app.mem0.ai → Dashboard → API Keys (if not using Claude.ai integration) |
+| mem0 | `MEM0_API_KEY` | app.mem0.ai → Dashboard → API Keys. Use with the official HTTP MCP at https://mcp.mem0.ai/mcp — see §3.2. Do not use OAuth-based connectors. |
 | Scholar Gateway | — | Connected via Claude.ai — complete OAuth flow once in Claude.ai settings |
 | YouTube Transcript | — | No credentials needed (uses yt-dlp locally) |
 
@@ -1071,7 +1113,8 @@ The `kb-review` meta-skill performs a service check on every invocation
 (see the Prerequisites Check in `kb-review.md`). It:
 1. Checks each `mcp_servers` entry from the manifest
 2. For mem0: checks tool registry for data tools (zero-cost, zero auth
-   attempts) — see Section 3.2. Reports as available or "not authenticated"
+   attempts) — see Section 3.2. Reports as available, "misconfigured
+   (OAuth connector, no data tools)", or absent
 3. For all other services: tests connectivity via the `check_tool`
 4. Verifies env vars are set for credentialed services
 5. Reports full status table with setup instructions for anything missing
