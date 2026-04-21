@@ -601,10 +601,13 @@ skips pre-processing entirely and proceeds to direct transcript extraction.
 The system degrades to the standard transcript-based absorption flow — still
 functional, but without cross-source synthesis or citation-backed claims.
 
-**Extraction via YouTube Transcript MCP** (hancengiz/youtube-transcript-mcp):
-- yt-dlp based — no API key needed
-- Automatic pagination for transcripts > 50K characters
-- Returns full transcript with timestamps
+**Extraction via YouTube Transcript MCP** (`@kimtaeyoon83/mcp-server-youtube-transcript`):
+- Uses public YouTube caption endpoints — no API key needed
+- `get_transcript` tool with options: url, lang, include_timestamps, strip_ads
+- Set `include_timestamps=true` so kb-absorb's "Key Claims with timestamps"
+  template works correctly
+- `strip_ads=true` (default) filters out sponsorship/promo content by
+  chapter markers
 - Always runs, even with NotebookLM — raw transcript is the permanent snapshot
 
 **Source note format for YouTube (with NotebookLM enrichment):**
@@ -1096,9 +1099,9 @@ MCP servers used by source adapters:
 | MCP Server | Source Types | Phase | Tools Used | Credentials |
 |------------|-------------|-------|------------|-------------|
 | Scholar Gateway | paper, preprint | discovery | `semanticSearch` | None (Claude.ai integration) |
-| YouTube Data API (ZubeidHendricks) | youtube | discovery | search, video metadata | `YOUTUBE_API_KEY` |
+| YouTube Data API (`@kirbah/mcp-youtube`) | youtube | discovery | `searchVideos`, `getVideoDetails`, `getChannelStatistics`, `getTranscripts` (fallback) | `YOUTUBE_API_KEY` |
 | NotebookLM (PleasePrompto) | youtube | pre-processing | `list_notebooks`, `create_notebook`, `add_youtube_source`, `query_notebook` | `GOOGLE_COOKIES` |
-| YouTube Transcript (hancengiz) | youtube | extraction | transcript extraction | None (yt-dlp) |
+| YouTube Transcript (`@kimtaeyoon83/mcp-server-youtube-transcript`) | youtube | extraction | `get_transcript` | None (public caption endpoints) |
 | Twitter/X (armatrix) | twitter | discovery + extraction | `search_tweets`, `get_tweet_thread`, `get_user_timeline` | `TWITTERAPI_KEY` |
 | WebSearch (built-in) | all types | discovery (fallback) | keyword search | None |
 | WebFetch (built-in) | all types | extraction (fallback) | content extraction | None |
@@ -1141,12 +1144,12 @@ This file CAN be committed (no secrets, only variable references).
     },
     "youtube-api": {
       "command": "npx",
-      "args": ["-y", "@zubeidhendricks/youtube-mcp-server"],
+      "args": ["-y", "@kirbah/mcp-youtube"],
       "env": { "YOUTUBE_API_KEY": "${YOUTUBE_API_KEY}" }
     },
     "youtube-transcript": {
       "command": "npx",
-      "args": ["-y", "youtube-transcript-mcp"],
+      "args": ["-y", "@kimtaeyoon83/mcp-server-youtube-transcript"],
       "env": {}
     },
     "notebooklm": {

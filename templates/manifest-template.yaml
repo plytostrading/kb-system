@@ -151,21 +151,39 @@ mcp_servers:
     check_tool: "mcp__claude_ai_Scholar_Gateway__semanticSearch"
     credentials: []
 
-  # Uncomment and configure additional servers as needed:
-  #
-  # youtube_api:
-  #   description: "YouTube search and video metadata"
-  #   required: false
-  #   check_tool: "youtube/search"
-  #   credentials:
-  #     - env: YOUTUBE_API_KEY
-  #       how_to_get: "https://console.cloud.google.com → YouTube Data API v3"
-  #
-  # youtube_transcript:
-  #   description: "YouTube transcript extraction (yt-dlp)"
-  #   required: false
-  #   check_tool: "youtube-transcript/get_transcript"
-  #   credentials: []
+  youtube_api:
+    description: "YouTube search, video metadata, channel info (Data API v3)"
+    required: false
+    # The canonical stdio MCP as of 2026-04: @kirbah/mcp-youtube.
+    # Install: claude mcp add --scope user youtube-api -- npx -y @kirbah/mcp-youtube
+    # Reads YOUTUBE_API_KEY from Claude Code's process env (set in
+    # ~/.claude/settings.json under the "env" block — NOT via shell rc).
+    credentials:
+      - env: YOUTUBE_API_KEY
+        how_to_get: "https://console.cloud.google.com → YouTube Data API v3 → Credentials → Create API Key"
+    notes: >
+      Exposes tools for searchVideos, getVideoDetails, getChannelStatistics,
+      getTrendingVideos, and getTranscripts. Search tools cost 100 quota
+      units per call; metadata tools cost 1 unit; transcripts are free.
+      Daily free quota is 10,000 units. See @kirbah/mcp-youtube README for
+      the full tool list.
+
+  youtube_transcript:
+    description: "YouTube transcript extraction (captions, multi-language, ads-filtered)"
+    required: false
+    # The canonical stdio MCP as of 2026-04:
+    # @kimtaeyoon83/mcp-server-youtube-transcript.
+    # Install: claude mcp add --scope user youtube-transcript --
+    #   npx -y @kimtaeyoon83/mcp-server-youtube-transcript
+    # No credentials needed (uses public YouTube caption endpoints).
+    credentials: []
+    notes: >
+      Exposes get_transcript with url / lang / include_timestamps /
+      strip_ads options. Prefer include_timestamps=true so kb-absorb can
+      populate the "Key Claims with timestamps" template. Falls back to
+      WebFetch on the video page when unavailable (degraded).
+
+  # Optional — enable if you want premium NotebookLM enrichment for YouTube:
   #
   # notebooklm:
   #   description: "NotebookLM pre-processing for YouTube content"
