@@ -90,18 +90,39 @@ incidental detail than distilled summaries).
 
 ### Step 1: Locate Session Transcripts
 
-Compute the sanitized cwd by transforming the current working directory:
+**Important: resolve symlinks before sanitizing.** Claude Code writes
+per-project transcript folders using the REAL path of the working
+directory, not the path the user typed. If the working directory is a
+symlink (for example, `/data/github/algobrute-engine` resolving to
+`/media/smalik/data/github/algobrute-engine`), naive sanitization of
+the typed path produces a folder name that does not exist on disk.
+
+Compute the sanitized cwd as follows:
 
 ```
-sanitized = "-" + cwd.lstrip("/").replace("/", "-")
-# e.g. /data/github/algobrute-engine → -data-github-algobrute-engine
+real_cwd   = realpath(cwd)   # resolves all symlinks in the path
+sanitized  = "-" + real_cwd.lstrip("/").replace("/", "-")
+
+# Example:
+#   cwd       = /data/github/algobrute-engine (a symlink)
+#   real_cwd  = /media/smalik/data/github/algobrute-engine
+#   sanitized = -media-smalik-data-github-algobrute-engine
 ```
 
 Transcript directory: `~/.claude/projects/{sanitized}/`.
 
-List `*.jsonl` files in that directory. With `--cross-project`, also
-list files under other project directories; tag each with its source
-cwd (recoverable by un-sanitizing the folder name).
+**Fallback** (defensive — in case the sanitization convention changes
+in a future Claude Code version): if the computed directory does not
+exist but `~/.claude/projects/` has other subfolders, scan each
+`*.jsonl` file's first 20 events for a `cwd` field (user or attachment
+events typically carry it). Match transcripts whose recorded cwd
+equals `real_cwd`. Report the recovered mapping so future runs can
+update the sanitization rule if needed.
+
+List `*.jsonl` files in the resolved directory. With `--cross-project`,
+also list files under other project directories; tag each with its
+source cwd (recoverable by un-sanitizing the folder name or by reading
+the cwd field from the transcript itself).
 
 ### Step 2: Determine Capture Scope
 
