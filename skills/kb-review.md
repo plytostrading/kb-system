@@ -20,7 +20,7 @@ project artifacts against domain best practices.
 Parse the user's invocation for:
 - `--project`: **required** — the project name (matches a manifest file in `.claude/kb-projects/`)
 - `--scope`: `all` (default) or a specific domain name (must exist in the project's manifest)
-- `--phase`: `all` (default), `discovery`, `absorb`, `assess`, `refresh`
+- `--phase`: `all` (default), `discovery`, `absorb`, `assess`, `refresh`, `journal`
 - `--force`: skip staleness checks, run everything
 - `--cross-project`: opt-in cross-project knowledge sharing (default: OFF)
   When enabled: Fast.io searches scope to workspace root instead of project folder;
@@ -211,6 +211,14 @@ is needed.
 
 4. **Assessment** (if needed):
    `Skill("kb-assess", "--project {name} --scope {domains} [--cross-project]")`
+
+5. **Journal capture** (final phase, always runs unless `--phase` excludes it):
+   `Skill("kb-capture", "--project {name} --since last-capture")`
+
+   Runs last so it can include the reasoning from this review cycle itself
+   — every /kb-review session becomes its own journal entry. If the user
+   invokes `--phase journal` in isolation, only kb-capture runs (useful
+   for capturing ad-hoc work sessions that didn't go through a full review).
 
 Note: `--cross-project` is passed to discovery and assessment (where cross-project
 knowledge adds value) but NOT to absorption or refresh (which are always project-scoped).

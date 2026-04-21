@@ -165,6 +165,40 @@ INDEX entries without notes → mark as `status=missing_file`.
 **Auto-fix:** Flushed automatically in Step 5 when mem0 is available.
 Can also be triggered in isolation via `--flush-mem0`.
 
+#### Category 10: Uncaptured Journal Sessions
+
+**Check:** Local Claude Code session transcripts exist under
+`~/.claude/projects/{sanitized-cwd}/*.jsonl` that are newer than the
+bookmark at `{project_folder}/journal/.bookmark.yaml` (and not present
+in `{project_folder}/journal/INDEX.md`). This is the journal-staleness
+signal — work has happened but hasn't been captured to the KB.
+
+**How:**
+1. Compute sanitized cwd (see `kb-capture.md` Step 1).
+2. List `*.jsonl` files in the transcript folder. Count files with
+   `mtime > bookmark.last_captured_at` AND `session_id NOT IN
+   bookmark.captured_session_ids`.
+3. Exclude in-progress sessions (mtime within last 60 seconds).
+
+**Severity:**
+- Info if 1–2 uncaptured sessions
+- Warning if 3–9 uncaptured sessions
+- Error if ≥10 uncaptured sessions (significant decision-history
+  drift — work is accumulating faster than it's being journaled)
+
+**Auto-fix:** Cannot auto-fix automatically. Flushed by running
+`/kb-capture --project {name} --since last-capture`. If the bookmark
+doesn't exist yet (first-ever run), suggest `/kb-capture --project
+{name} --since 7d` to start capturing recent work.
+
+**Why this matters:** Journal staleness isn't just bookkeeping — it
+means generalizable insights from recent work are not flowing into
+mem0 (so future assessments miss them) and decision rationale is not
+indexed for future retrieval. The cost of a delayed capture grows
+with the session count: older transcripts may be trimmed by Claude
+Code's retention policy, and the more sessions pile up, the larger
+the distillation cost when finally run.
+
 ### Step 3: Report
 
 ```
@@ -192,6 +226,9 @@ Findings:
 
   [INFO] Pending mem0 queue: 3 entries awaiting flush
     → Run with --flush-mem0 to attempt flush
+
+  [WARNING] Uncaptured journal sessions: 5 sessions since last capture
+    → Run /kb-capture --project {name} --since last-capture
   ...
 
 Auto-fixable: {N} issues
@@ -199,6 +236,9 @@ Auto-fixable: {N} issues
 
 mem0 pending queue: {N} entries
   Run with --flush-mem0 to flush.
+
+Journal capture debt: {N} uncaptured sessions
+  Run /kb-capture --project {name} --since last-capture to drain.
 
 Manual attention needed: {N} issues
   {list of issues requiring human judgment}
@@ -209,6 +249,7 @@ Append work log via `worklog/append`:
 [{project}] Refresh/lint complete. Scope: {domains}. {N} errors, {N} warnings.
 {N} auto-fixed (if --fix). {N} require manual attention.
 mem0: {available|not authenticated|unavailable}. Pending: {N}. {Flushed N / skipped}.
+Journal: {N} uncaptured sessions since bookmark {date}.
 ```
 
 ### Step 4: Apply Auto-Fixes (if --fix)

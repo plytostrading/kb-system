@@ -310,6 +310,93 @@ of truth is always Fast.io.
 Use `fastio` CLI or the `download` MCP tool to export notes to a local directory.
 This is not required for the system to function.
 
+### 3.4 Session Journaling — Durable Chain-of-Thought
+
+**Why this exists.** kb-* skills produce artifacts (notes, syntheses,
+assessments) and mem0 captures high-level insights, but the actual
+reasoning — decision alternatives, diagnostic findings, revisions, dead
+ends — lives in the session transcripts Claude Code keeps locally and
+aged-out of the agent's context. That chain-of-thought is the single
+richest record of why choices were made. Without persistence, it
+evaporates as soon as the session compacts or the transcript is
+trimmed. Session journaling promotes this record from ephemeral local
+state to project-scoped KB memory.
+
+**What gets captured.** Claude Code writes per-project session
+transcripts to `~/.claude/projects/{sanitized-cwd}/{session_id}.jsonl`.
+Each line is a JSON event. Assistant messages have content blocks of
+type `text`, `tool_use`, and (when extended thinking is enabled)
+`thinking`. The thinking blocks contain the agent's internal reasoning
+— diagnosis, decision deliberation, self-correction, plan revision.
+These blocks are the primary raw material the `kb-capture` skill
+consumes.
+
+**How it's stored.** `kb-capture` produces two artifact classes per
+session:
+
+1. **Distilled journal note** — `{project_folder}/journal/{date}-
+   {session_id}-distilled.md`. Structured markdown with front-matter
+   metadata (session_id, outcome, projects_touched, prompt_version_hash,
+   counts), a session summary, enumerated Decisions (each with
+   Context / Decision / Alternatives / Rationale / Artifacts), a
+   Diagnostics section for non-obvious findings, an Insights section
+   for generalizable patterns, an Artifacts Touched list, and Open
+   Threads. Auto-indexed for RAG — future semantic searches surface
+   relevant decisions alongside sources and syntheses.
+2. **Raw dump (optional, gated by --raw)** —
+   `{project_folder}/journal/raw/{date}-{session_id}-raw.md`. Verbatim
+   capture of thinking blocks + tool calls + messages. Not indexed for
+   RAG. Forensic / audit use only. Cost-gated because raw transcripts
+   can be 30–50KB per session and Fast.io RAG ingestion is ~10
+   credits/page.
+
+**Bookmark and deduplication.** A bookmark at
+`{project_folder}/journal/.bookmark.yaml` tracks captured session IDs
+and the last-captured timestamp. `kb-capture` compares the transcript
+directory against the bookmark AND against the journal INDEX (defense
+in depth) before distilling, so re-running the skill is idempotent and
+safe after bookmark loss.
+
+**Integration with the rest of the KB.**
+
+- **Hot cache** — `kb-capture` writes a "Recent decisions" section to
+  `{project}/hot.md`. `kb-assess` already reads hot.md as Layer 1
+  Context, so recent decisions become part of every assessment without
+  consuming additional token budget.
+- **mem0** — `kb-capture` promotes 2–3 highest-signal Insights per
+  capture to mem0 (tagged `[{project}][JOURNAL-{date}]`). If mem0 is
+  unavailable, buffered to `mem0-pending.md` like any other write.
+- **Staleness lint** — Category 10 in `kb-refresh` flags uncaptured
+  sessions. Severity escalates with count (Info → Warning → Error at
+  ≥10 uncaptured sessions).
+
+**Privacy / data egress.** Thinking tokens can contain sensitive
+material (strategy hypotheses, credential-adjacent paths, debugging
+traces). `kb-capture` surfaces a privacy notice on first-ever capture
+and requires explicit confirmation. The manifest supports a
+`journal.redact_patterns` field (regex list) but enforcement is
+deferred to a future release — in v1, the manifest accepts the field
+and the skill warns if non-empty.
+
+**Prompt version hash.** The distillation prompt is a quality
+determinant of the journal entry — changes to it alter output fidelity
+over time. Each distilled note includes the sha256 hash of the
+distillation prompt in front-matter, so "what prompt produced this
+entry" is always queryable. When the prompt changes, the bookmark
+records the transition and the skill surfaces a prompt-drift event.
+
+**Outcome tagging.** `kb-capture --outcome {success|partial|failed}`
+marks captured sessions. Downstream skills can (in future versions)
+weight journal context by outcome — a `failed` session's reasoning
+should not be treated as authoritative design knowledge. In v1 the
+tag is recorded but not consumed.
+
+**What this does NOT solve.** Journaling does not redact, does not
+compress older entries automatically, and does not fetch context from
+third-party tools (e.g. your IDE's local chat history). It reads
+Claude Code's own transcripts and nothing else. See `kb-capture.md`
+for the complete behavior spec.
+
 ## 4. Project Manifests
 
 All project-specific knowledge lives in **project manifest** files — YAML
@@ -883,7 +970,17 @@ All skills accept `--project {name}` to identify which manifest to load.
     └──────────┬───────────────────────────┘
                │
     ┌──────────▼───────────────────────────┐
-    │  6. UPDATE HOT CACHE + WORK LOG      │
+    │  6. JOURNAL CAPTURE (chain-of-       │
+    │  thought → Fast.io)                  │
+    │  Read local transcripts (JSONL) →    │
+    │  distill decisions/diagnostics/      │
+    │  insights → write journal note →     │
+    │  promote highlights to mem0 →        │
+    │  advance bookmark                    │
+    └──────────┬───────────────────────────┘
+               │
+    ┌──────────▼───────────────────────────┐
+    │  7. UPDATE HOT CACHE + WORK LOG      │
     │  workspace/update-note(hot.md)       │
     │  worklog/append (activity record)    │
     └──────────────────────────────────────┘
@@ -965,6 +1062,7 @@ The `/kb-refresh` skill checks 9 categories of knowledge base health:
 | 7 | Stale index | INDEX.md out of sync with workspace folder contents | Error |
 | 8 | Stale syntheses | Domain synthesis not updated after new source absorption | Warning |
 | 9 | Pending mem0 queue | Entries in mem0-pending.md awaiting flush | Info/Warning |
+| 10 | Uncaptured journal sessions | Local transcripts exist that are newer than the journal bookmark | Info/Warning/Error (severity scales with count) |
 
 ## 11. Fast.io Tool Quick Reference
 
@@ -1152,3 +1250,4 @@ upgrades one or more source adapters from fallback to preferred path.
 | 2026-04-13 | Extracted KB system to standalone repo | KB system is topic-agnostic and serves multiple projects. Standalone repo with symlink-based installation into consuming projects. Skills symlinked into .claude/skills/, architecture doc symlinked into .claude/kb-docs/. Single .kb-link config file per consuming project stores relative path to KB repo |
 | 2026-04-13 | Write-through buffer for mem0 | Failed mem0 writes buffer to Fast.io `{project_folder}/mem0-pending.md` instead of being lost. Queue flushed by `kb-refresh --flush-mem0`. Category 9 lint monitors queue depth. Zero data loss even with prolonged mem0 outage |
 | 2026-04-14 | Zero-cost mem0 availability (replaces lazy auth, cooldown file, status propagation) | Previous approach (lazy auth + cooldown file + cross-skill propagation) still caused account lockouts because probe calls and MCP server connection-level auth accumulated. New approach: skills check the tool registry for mem0 data tools — a local lookup with zero network traffic, zero auth attempts. If data tools exist → authenticated, use freely. If only authenticate/complete_authentication exist → not authenticated, skip entirely. Authentication is user-initiated only. Removed: cooldown files, `--mem0-status` argument, cross-skill propagation, probing logic |
+| 2026-04-21 | Session journaling as a new artifact class | Claude Code writes per-project transcripts (JSONL) to `~/.claude/projects/{sanitized-cwd}/` including extended-thinking blocks. Those blocks are the richest record of WHY choices were made and evaporate when sessions age out. `kb-capture` reads transcripts, distills via a versioned prompt, writes a structured journal note to `{project_folder}/journal/`, promotes 2–3 highest-signal insights to mem0, and adds a "Recent decisions" section to hot.md. Raw dumps are opt-in via `--raw` (forensic use only, not RAG-indexed by default) because their ingestion cost is much higher than distilled notes. Category 10 lint monitors uncaptured-session debt. Privacy: thinking tokens are uploaded verbatim; `journal.redact_patterns` in the manifest is a future extension point. First-order win: decisions become queryable across sessions. Second-order: agents onboarding to a project can prime on hot.md's Recent Decisions section. Third-order: over months the journal becomes a compliance-grade record of design intent |

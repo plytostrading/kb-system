@@ -195,3 +195,18 @@ staleness:
   stale_days: 30                        # Domain is STALE after this many days
   aging_days: 7                         # Domain is AGING after this many days
   unreviewed_days: 30                   # Domain is UNREVIEWED if no assessment in this many days
+
+# -----------------------------------------------------------------------------
+# Journaling — session chain-of-thought capture
+# -----------------------------------------------------------------------------
+# Configures the kb-capture skill (see ARCHITECTURE.md §3.4, USER-GUIDE §12b).
+# All fields optional; sensible defaults applied when absent.
+# -----------------------------------------------------------------------------
+journal:
+  distillation_budget_tokens: 3000      # Soft cap on distilled-note length per session
+  retain_raw_days: 30                   # Raw dumps older than this can be archived (future; not enforced in v1)
+  redact_patterns: []                   # Regex list to scrub before upload. Accepted in v1 but NOT enforced;
+                                        # skill warns if non-empty. Future release will apply these to
+                                        # thinking blocks + tool args before writing to Fast.io.
+  default_outcome: unspecified          # If --outcome is not passed to /kb-capture, use this tag.
+                                        # Valid: success | partial | failed | unspecified

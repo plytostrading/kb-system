@@ -977,6 +977,157 @@ it does not attempt to authenticate.
 
 ---
 
+## 12b. Capturing session reasoning (chain-of-thought journaling)
+
+Every Claude Code session in your project directory writes a transcript
+to `~/.claude/projects/{sanitized-cwd}/{session_id}.jsonl`. When
+extended thinking is enabled, those transcripts include **thinking
+blocks** — the agent's internal reasoning during the session.
+
+Without journaling, that reasoning evaporates when the session ages
+out. The `kb-capture` skill reads those local transcripts, distills
+them into structured decision journals, and persists them to Fast.io
+at `{project_folder}/journal/`. Future sessions can then query them
+like any other KB artifact, and high-signal insights are promoted to
+mem0.
+
+### Quick start
+
+```
+# First time (sets a bookmark; captures last 7 days by default)
+/kb-capture --project my-project
+
+# Incremental — since last successful capture
+/kb-capture --project my-project --since last-capture
+
+# See what would be captured without writing
+/kb-capture --project my-project --dry-run
+```
+
+### Controlling scope
+
+```
+# Specific lookback window
+/kb-capture --project my-project --since 14d
+/kb-capture --project my-project --since 2026-04-01
+/kb-capture --project my-project --since all        # full history; expensive
+
+# Tag the outcome of the captured sessions
+/kb-capture --project my-project --outcome success
+/kb-capture --project my-project --outcome failed
+/kb-capture --project my-project --outcome partial
+
+# Also persist verbatim raw dumps (forensic use; costs more Fast.io credits)
+/kb-capture --project my-project --raw
+
+# Multi-repo work — include transcripts from other project dirs
+/kb-capture --project my-project --cross-project
+```
+
+### What gets written
+
+- `{project_folder}/journal/{YYYY-MM-DD}-{session_id}-distilled.md`
+  — structured markdown: Context / Decisions / Diagnostics / Insights
+  / Artifacts / Open Threads. Auto-indexed for RAG.
+- `{project_folder}/journal/raw/{YYYY-MM-DD}-{session_id}-raw.md`
+  — only if `--raw`. Verbatim thinking + tool-calls + messages.
+  Not indexed for RAG by default.
+- `{project_folder}/journal/INDEX.md` — table of captured sessions +
+  a Decision Quick Reference.
+- `{project_folder}/journal/.bookmark.yaml` — advances after each run;
+  prevents re-capture of already-processed sessions.
+- `{project_folder}/hot.md` — a "Recent decisions" section at the top,
+  which `kb-assess` will read as Layer 1 context on future reviews.
+- **mem0** — 2–3 highest-signal insights per capture, tagged
+  `[{project}][JOURNAL-{date}]`. Buffered to `mem0-pending.md` if
+  mem0 is unavailable.
+
+### How it fits into `/kb-review`
+
+`/kb-review` runs `kb-capture` as its final phase by default, so
+routine reviews always rotate recent reasoning into the KB. To run
+capture in isolation:
+
+```
+/kb-review --project my-project --phase journal
+```
+
+To skip capture during a review (e.g. if you've just captured manually):
+
+```
+/kb-review --project my-project --phase refresh,discovery,absorb,assess
+```
+
+### Category 10 lint — capture debt
+
+`kb-refresh` (and the refresh phase of `kb-review`) counts uncaptured
+session transcripts. Severity scales:
+
+| Uncaptured sessions | Severity |
+|---------------------|----------|
+| 1–2                 | Info     |
+| 3–9                 | Warning  |
+| 10+                 | Error    |
+
+The warning is a nudge, not a blocker — assessment still proceeds.
+The error at 10+ sessions surfaces because decision-history drift is
+accumulating faster than you're capturing it; older transcripts may
+also age out of Claude Code's retention before they can be journaled.
+
+### Privacy note
+
+Thinking blocks are uploaded verbatim to Fast.io. They can contain:
+
+- Strategy hypotheses and reasoning
+- File paths and code snippets
+- Debugging traces that reference credentials (though the actual
+  secret values are not usually in thinking content — they're in tool
+  call inputs, which are separately captured)
+- Candid self-critique and exploratory reasoning
+
+**Redaction is not applied by default in v1.** The manifest supports
+a `journal.redact_patterns` field (regex list) for a future release.
+If this is a concern:
+
+1. Use `--dry-run` to see what would be uploaded
+2. Keep `--raw` off (distilled notes have less incidental detail)
+3. Review `{project_folder}/journal/` contents periodically — delete
+   individual notes via `workspace/delete-note` if needed
+4. For the most sensitive projects, consider running Claude Code
+   without extended thinking enabled — the transcripts then won't
+   contain thinking blocks at all
+
+### Troubleshooting journaling
+
+**"Nothing to capture" despite recent sessions**
+
+- Check `claude mcp list | grep fast-io` — Fast.io must be connected
+  for the skill to read the bookmark
+- Verify the cwd sanitization matches: look for your project folder
+  under `~/.claude/projects/` (e.g., a project at
+  `/data/github/foo` maps to `-data-github-foo`)
+- If the bookmark claims sessions are already captured but the
+  `journal/INDEX.md` doesn't list them, the bookmark is out of sync:
+  delete `journal/.bookmark.yaml` via `workspace/delete-note` and
+  re-run with `--since 7d`
+
+**Distillation looks thin or wrong**
+
+- Check the session had extended thinking enabled — without it,
+  transcripts don't contain thinking blocks, only tool calls and text
+- A failed/confused session distills into a thin journal by design;
+  tag with `--outcome failed` to flag it for future weighting
+
+**Credit usage spike**
+
+- If you ran with `--raw`, raw dumps can be 10x the size of distilled
+  notes. Check `{project}/journal/raw/` and consider deleting old
+  entries if cost is a concern
+- `--since all` replays the full history; use `--since {n}d` for
+  incremental captures
+
+---
+
 ## 13. Moving or Reorganizing Repos
 
 ### Moving the KB System repo
@@ -1288,3 +1439,18 @@ brew install python3
 | `--project` | manifest name | required | Which project |
 | `--scope` | `all`, domain name(s) | `all` | Limit to specific domains |
 | `--cross-project` | *(flag)* | off | Surface insights from other projects |
+
+### `/kb-capture` — Session journaling
+
+```
+/kb-capture --project <name> [options]
+```
+
+| Flag | Values | Default | Description |
+|------|--------|---------|-------------|
+| `--project` | manifest name | required | Which project |
+| `--since` | `{n}d`, ISO date, `last-capture`, `all` | `7d` | Lookback window for transcripts |
+| `--dry-run` | *(flag)* | off | List what would be captured; do not write |
+| `--raw` | *(flag)* | off | Also persist verbatim raw dumps (costs more credits) |
+| `--outcome` | `success`, `partial`, `failed` | *(unspecified)* | Tag captured sessions for future weighting |
+| `--cross-project` | *(flag)* | off | Include transcripts from other project directories |
