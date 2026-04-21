@@ -94,18 +94,22 @@ KB System — Service Status
 Project: {project_name}
 
   ✓ Fast.io         — connected (workspace: shared-kb)          [REQUIRED]
-  ⚠ mem0            — misconfigured (OAuth connector, no data tools) [optional → writes buffered]
-    → Recommended fix: switch to API-key MCP. This eliminates the
-      OAuth lockout risk entirely — there is no `authenticate` tool
-      to accidentally call.
-      1. Remove the OAuth connector (Claude.ai → Connectors → mem0 → Remove,
-         or `claude mcp remove mem0-mcp`).
-      2. Get an API key: https://app.mem0.ai/dashboard → API Keys.
-      3. Install the official HTTP MCP:
-           npx mcp-add --name mem0-mcp --type http \
-             --url "https://mcp.mem0.ai/mcp" --clients "claude code"
-      4. Restart Claude Code. Tools like `mcp__mem0-mcp__add_memory`
-         and `mcp__mem0-mcp__search_memories` will then appear.
+  ⚠ mem0            — misconfigured (no data tools, only authenticate) [optional → writes buffered]
+    → Recommended fix: register the HTTP MCP with an Authorization
+      header so it authenticates via API key instead of falling back
+      to the OAuth prompt. This removes the lockout vector — once
+      data tools are present, there is no `authenticate` tool to
+      accidentally call.
+      1. Get an API key: https://app.mem0.ai/dashboard → API Keys.
+      2. Export it into the current shell, then re-register:
+           export MEM0_API_KEY=m0_...
+           claude mcp remove mem0-mcp -s user
+           claude mcp add --scope user --transport http mem0-mcp \
+             https://mcp.mem0.ai/mcp \
+             --header "Authorization: Bearer ${MEM0_API_KEY}"
+      3. Verify `claude mcp list | grep mem0` shows ✓ Connected.
+      4. Restart Claude Code. `mcp__mem0-mcp__add_memory`,
+         `mcp__mem0-mcp__search_memories`, etc. will appear.
   ✓ Scholar Gateway — connected (via Claude.ai integration)     [optional]
   ✗ YouTube API     — YOUTUBE_API_KEY not set                   [optional → WebSearch fallback]
     → Get key: https://console.cloud.google.com → YouTube Data API v3

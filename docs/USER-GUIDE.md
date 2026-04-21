@@ -1073,56 +1073,82 @@ cd /path/to/kb-system
 2. Is the token valid? Try `fastio auth check` if you have the CLI
 3. Does the workspace exist? Check at [fast.io](https://fast.io)
 
-### mem0 shows only authenticate tools (OAuth connector installed)
+### mem0 shows only authenticate tools (missing API-key header)
 
-**Symptom:** `claude mcp list` shows `mem0-mcp`, but the only mem0 tools
-available in Claude Code sessions are `mcp__mem0-mcp__authenticate` and
-`mcp__mem0-mcp__complete_authentication`. KB service status reports mem0
-as "misconfigured (OAuth connector, no data tools)."
+**Symptom:** `claude mcp list` shows `mem0-mcp: ✗ Needs authentication`
+and the only mem0 tools available in Claude Code sessions are
+`mcp__mem0-mcp__authenticate` and `mcp__mem0-mcp__complete_authentication`.
+KB service status reports mem0 as "misconfigured (no data tools)."
 
-**Cause:** You have an OAuth-based mem0 connector (e.g. a Claude.ai
-Connector, or a third-party wrapper) instead of the official API-key HTTP
-MCP. The OAuth path:
-- Rate-limits authentication attempts and locks the account when exceeded
-- Does not persist OAuth state reliably across Claude Code sessions, so
-  each new session lands back on only-the-authenticate-tools
-- Creates a recurring temptation for well-meaning agents to "just
-  authenticate" — which is exactly what triggers the lockout
+**Cause (most common):** You registered the correct endpoint
+(`https://mcp.mem0.ai/mcp`) without an `Authorization: Bearer <key>`
+header. The server falls back to the interactive OAuth flow and exposes
+only the `authenticate`/`complete_authentication` tools until OAuth
+completes. OAuth attempts are rate-limited and state doesn't reliably
+persist between Claude Code sessions — so each new session resets to the
+only-auth-tools state and any reflexive attempt to "just authenticate"
+extends the lockout window.
+
+**Less common cause:** You installed a different mem0 MCP (e.g. a
+Claude.ai Connector that wraps mem0 via OAuth) instead of the official
+HTTP endpoint. Same symptom, similar fix.
 
 **Do not attempt to "just log in" to resolve this.** Each `authenticate`
-call consumes a rate-limited attempt; repeat attempts within the
-lockout window extend the penalty rather than clearing it.
+call consumes a rate-limited attempt; repeat attempts within the lockout
+window extend the penalty rather than clearing it.
 
-**Fix — switch to the official API-key MCP:**
+**Fix — register with the Authorization header:**
 
-1. Remove the OAuth connector.
-   - If installed via Claude.ai Connectors: Settings → Connectors →
-     mem0 → Remove.
-   - If installed as a local MCP: `claude mcp remove mem0-mcp`.
+1. Check your current config:
+   ```
+   claude mcp get mem0-mcp
+   ```
+   - If URL is **not** `https://mcp.mem0.ai/mcp`, run
+     `claude mcp remove mem0-mcp -s user` and continue below.
+   - If URL is correct but the config has no Authorization header,
+     you'll re-register below so the header gets added.
+
 2. Get an API key from [app.mem0.ai/dashboard](https://app.mem0.ai/dashboard)
-   → API Keys.
-3. Install the official HTTP MCP:
+   → API Keys. Export it into your shell for the one-off registration:
    ```
-   npx mcp-add --name mem0-mcp --type http \
-     --url "https://mcp.mem0.ai/mcp" --clients "claude code"
+   export MEM0_API_KEY=m0_your_key_here
    ```
-4. Provide the API key when the installer prompts (or export
-   `MEM0_API_KEY` in your environment).
-5. Restart Claude Code. The tool registry should now show
-   `mcp__mem0-mcp__add_memory`, `mcp__mem0-mcp__search_memories`, and the
-   other seven data tools — and no `authenticate` tool at all.
+   (If you already store it in an env file, source that file first.
+   The export only needs to last long enough to run the next command.)
+
+3. Re-register the MCP with the header baked into the config:
+   ```
+   claude mcp remove mem0-mcp -s user
+   claude mcp add --scope user --transport http mem0-mcp \
+     https://mcp.mem0.ai/mcp \
+     --header "Authorization: Bearer ${MEM0_API_KEY}"
+   ```
+   The `$MEM0_API_KEY` is expanded by the shell at registration time, so
+   the literal token ends up stored in Claude Code's user-scope config
+   (`~/.claude.json`). The env var doesn't need to remain set after this.
+
+4. Verify:
+   ```
+   claude mcp list | grep mem0
+   ```
+   Should show `mem0-mcp: ✓ Connected`.
+
+5. Restart Claude Code. The tool registry in new sessions should now
+   include `mcp__mem0-mcp__add_memory`, `mcp__mem0-mcp__search_memories`,
+   and the other seven data tools — and no `authenticate` tool at all.
+
 6. On the next `/kb-review` run, KB System detects the data tools and
    automatically flushes any writes buffered in `mem0-pending.md` (see
    commit `6ace9c7`).
 
 **Why the KB skills can't fix this on your behalf:** the skills
 deliberately never call `authenticate`, because doing so would risk
-lockout. Resolution requires changing the MCP server configuration,
-which lives in Claude Code settings (outside this repo).
+lockout. Resolution requires updating the MCP server registration,
+which lives in Claude Code's config (outside this repo).
 
 **Note:** Skills never call authenticate automatically — this prevents
-the account lockouts that occur with rate-limited OAuth. Authentication,
-when it exists at all, is always user-initiated.
+the account lockouts that occur with rate-limited OAuth fallback.
+Authentication, when it exists at all, is always user-initiated.
 
 ### Symlinks break after git pull
 
