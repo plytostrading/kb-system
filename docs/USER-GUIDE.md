@@ -215,7 +215,7 @@ Done! 5 skills + architecture doc linked.
 | File | Purpose |
 |------|---------|
 | `.kb-link` | Config file storing the relative path from your project root to the KB System repo. Used by the sync script. |
-| `.claude/skills/kb-*.md` | Symlinks to the five skill files. Claude Code picks these up automatically. |
+| `.claude/skills/kb-*/SKILL.md` | Symlinks to the six skill files, one subdirectory per skill (`kb-absorb/`, `kb-assess/`, `kb-capture/`, `kb-discover/`, `kb-refresh/`, `kb-review/`). Each subdir contains a `SKILL.md` symlink — this matches Claude Code's agent-skill discovery convention. |
 | `.claude/kb-docs/ARCHITECTURE.md` | Symlink to the architecture reference document. |
 | `scripts/kb-sync.sh` | Convenience script to refresh all symlinks if you move the KB System repo. |
 
@@ -228,7 +228,7 @@ KB System repo lives on your filesystem). Add these lines to your project's
 ```gitignore
 # KB System — symlinks from external kb-system repo (machine-local)
 .kb-link
-.claude/skills/kb-*.md
+.claude/skills/kb-*/
 .claude/kb-docs/
 ```
 
@@ -1166,7 +1166,7 @@ cd kb-system
 To check that symlinks are pointing to the right place:
 
 ```bash
-ls -la .claude/skills/kb-*.md
+ls -la .claude/skills/kb-*/SKILL.md
 ls -la .claude/kb-docs/ARCHITECTURE.md
 ```
 
@@ -1185,12 +1185,13 @@ cd kb-system
 git pull origin main
 ```
 
-Because your project's `.claude/skills/kb-*.md` files are symlinks pointing
-into the KB System repo, they automatically pick up the new versions. No
-re-install needed.
+Because your project's `.claude/skills/kb-*/SKILL.md` symlinks point into
+the KB System repo, they automatically pick up the new versions of
+existing skills. No re-install needed for content edits.
 
 If a new version adds files that didn't exist before (e.g., a new skill),
-re-run the install script to create the new symlinks:
+re-run the install script to create the new skill subdirectories and
+SKILL.md symlinks:
 
 ```bash
 ./install.sh ../your-project
@@ -1202,18 +1203,31 @@ re-run the install script to create the new symlinks:
 
 ### "Skills not found" in Claude Code
 
-**Symptom:** `/kb-review` isn't recognized as a skill.
+**Symptom:** `/kb-review` (or another kb-* skill) isn't recognized.
 
 **Check:**
 ```bash
-ls -la .claude/skills/kb-*.md
+ls -la .claude/skills/kb-*/SKILL.md
 ```
 
-If the symlinks are broken or missing, re-run the install:
+Each expected subdirectory (`kb-absorb/`, `kb-assess/`, `kb-capture/`,
+`kb-discover/`, `kb-refresh/`, `kb-review/`) should contain a `SKILL.md`
+symlink pointing into the kb-system repo. Claude Code's agent-skill
+discovery requires this directory layout — flat `.md` files directly
+under `.claude/skills/` are silently ignored.
+
+If the directories or symlinks are missing, re-run the install:
 ```bash
 cd /path/to/kb-system
 ./install.sh /path/to/your-project
 ```
+
+The installer cleans up any legacy flat-form symlinks from older
+kb-system versions as part of this migration.
+
+**Also remember:** Claude Code's skill registry is bound at session
+start. After any symlink change, start a fresh `claude` session — an
+already-running session will not discover the new skills.
 
 ### "Fast.io not connected"
 

@@ -59,18 +59,37 @@ mkdir -p "$TARGET/.claude/skills"
 mkdir -p "$TARGET/.claude/kb-docs"
 
 # Symlink skill files
-# Symlinks must be relative to the SYMLINK's parent directory, not the project root
+# Claude Code's agent-skill discovery expects directory-form skills:
+#   .claude/skills/<skill-name>/SKILL.md
+# (NOT flat .md files directly under .claude/skills/, which are silently
+# ignored by the registry.) We therefore create a subdirectory per skill
+# and symlink SKILL.md inside it to the authoritative source file in the
+# kb-system repo. Symlink targets are relative to the SYMLINK's parent,
+# which is now one directory deeper than the flat-form layout.
 SKILL_DIR="$TARGET/.claude/skills"
-REL_SKILLS="$(python3 -c "import os; print(os.path.relpath('$KB_ROOT/skills', '$SKILL_DIR'))")"
+
+# Clean up legacy flat-file kb-* symlinks from older install versions.
+# These files are invisible to Claude Code's skill loader but would confuse
+# anyone inspecting the layout; removing them makes the migration explicit.
+for legacy in "$SKILL_DIR"/kb-*.md; do
+    if [ -L "$legacy" ]; then
+        rm -f "$legacy"
+        echo "  · removed legacy flat-form symlink: $(basename "$legacy")"
+    fi
+done
 
 SKILL_COUNT=0
 for skill in "$KB_ROOT"/skills/kb-*.md; do
-    BASENAME="$(basename "$skill")"
-    LINK="$SKILL_DIR/$BASENAME"
+    BASENAME="$(basename "$skill")"            # e.g. kb-capture.md
+    SKILL_NAME="$(basename "$skill" .md)"      # e.g. kb-capture
+    SKILL_SUBDIR="$SKILL_DIR/$SKILL_NAME"
+    mkdir -p "$SKILL_SUBDIR"
+    LINK="$SKILL_SUBDIR/SKILL.md"
+    REL_FROM_SUBDIR="$(python3 -c "import os; print(os.path.relpath('$KB_ROOT/skills/$BASENAME', '$SKILL_SUBDIR'))")"
     rm -f "$LINK"
-    ln -s "$REL_SKILLS/$BASENAME" "$LINK"
+    ln -s "$REL_FROM_SUBDIR" "$LINK"
     SKILL_COUNT=$((SKILL_COUNT + 1))
-    echo "  ✓ .claude/skills/$BASENAME → $REL_SKILLS/$BASENAME"
+    echo "  ✓ .claude/skills/$SKILL_NAME/SKILL.md → $REL_FROM_SUBDIR"
 done
 
 # Symlink architecture doc
@@ -82,12 +101,16 @@ rm -f "$ARCH_LINK"
 ln -s "$REL_DOCS/ARCHITECTURE.md" "$ARCH_LINK"
 echo "  ✓ .claude/kb-docs/ARCHITECTURE.md → $REL_DOCS/ARCHITECTURE.md"
 
-# Copy sync script if it doesn't exist
+# Install (or refresh) sync script. We always overwrite because its logic
+# must track install.sh — if the directory-form convention ever changes
+# again, stale sync scripts would silently re-create the wrong layout.
 SYNC_DIR="$TARGET/scripts"
 SYNC_SCRIPT="$SYNC_DIR/kb-sync.sh"
-if [ ! -f "$SYNC_SCRIPT" ]; then
-    mkdir -p "$SYNC_DIR"
-    cat > "$SYNC_SCRIPT" << 'SYNCEOF'
+mkdir -p "$SYNC_DIR"
+if [ -f "$SYNC_SCRIPT" ]; then
+    echo "  · scripts/kb-sync.sh exists — overwriting with current template"
+fi
+cat > "$SYNC_SCRIPT" << 'SYNCEOF'
 #!/bin/bash
 # =============================================================================
 # KB System — Refresh symlinks from .kb-link config
@@ -126,13 +149,25 @@ mkdir -p "$SKILL_DIR" "$DOCS_DIR"
 REL_SKILLS="$(python3 -c "import os; print(os.path.relpath('$KB_ABS/skills', '$SKILL_DIR'))")"
 REL_DOCS="$(python3 -c "import os; print(os.path.relpath('$KB_ABS/docs', '$DOCS_DIR'))")"
 
-# Re-symlink skills
+# Clean up any legacy flat-form symlinks from older installs.
+for legacy in "$SKILL_DIR"/kb-*.md; do
+    if [ -L "$legacy" ]; then
+        rm -f "$legacy"
+        echo "  · removed legacy flat-form symlink: $(basename "$legacy")"
+    fi
+done
+
+# Re-symlink skills in directory-form (Claude Code's agent-skill convention).
 for skill in "$KB_ABS"/skills/kb-*.md; do
     BASENAME="$(basename "$skill")"
-    LINK="$SKILL_DIR/$BASENAME"
+    SKILL_NAME="$(basename "$skill" .md)"
+    SKILL_SUBDIR="$SKILL_DIR/$SKILL_NAME"
+    mkdir -p "$SKILL_SUBDIR"
+    LINK="$SKILL_SUBDIR/SKILL.md"
+    REL_FROM_SUBDIR="$(python3 -c "import os; print(os.path.relpath('$KB_ABS/skills/$BASENAME', '$SKILL_SUBDIR'))")"
     rm -f "$LINK"
-    ln -s "$REL_SKILLS/$BASENAME" "$LINK"
-    echo "  ✓ .claude/skills/$BASENAME"
+    ln -s "$REL_FROM_SUBDIR" "$LINK"
+    echo "  ✓ .claude/skills/$SKILL_NAME/SKILL.md"
 done
 
 # Re-symlink docs
@@ -142,16 +177,13 @@ echo "  ✓ .claude/kb-docs/ARCHITECTURE.md"
 
 echo "Done. All symlinks refreshed."
 SYNCEOF
-    chmod +x "$SYNC_SCRIPT"
-    echo "  ✓ scripts/kb-sync.sh created"
-else
-    echo "  · scripts/kb-sync.sh already exists (skipped)"
-fi
+chmod +x "$SYNC_SCRIPT"
+echo "  ✓ scripts/kb-sync.sh installed"
 
 echo ""
 echo "Add these to your .gitignore if not already present:"
 echo "  .kb-link"
-echo "  .claude/skills/kb-*.md"
+echo "  .claude/skills/kb-*/"
 echo "  .claude/kb-docs/"
 
 echo ""

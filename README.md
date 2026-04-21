@@ -134,7 +134,7 @@ and shouldn't be committed:
 
 ```
 .kb-link
-.claude/skills/kb-*.md
+.claude/skills/kb-*/
 .claude/kb-docs/
 ```
 
