@@ -102,23 +102,29 @@ cross-source synthesis that raw transcripts cannot provide.
 **Notebook management (one per project-domain):**
 
 1. Check for existing notebook named `{project}-{domain}` via
-   `notebooklm/list_notebooks`
+   `mcp__notebooklm__list_notebooks` (or the library-registry variant
+   `mcp__notebooklm__search_notebooks` if using the notebooklm-mcp-
+   ultimate package's local library tools)
 2. If exists → reuse (accumulates cross-source context over time)
-3. If not → create via `notebooklm/create_notebook` with name
-   `{project}-{domain}` and description from the manifest's domain description
+3. If not → create via `mcp__notebooklm__create_notebook_remote` with
+   name `{project}-{domain}` and description from the manifest's
+   domain description
 
 **Batch-add videos:**
 
 4. For all pending YouTube sources in this domain, batch-add to the notebook
-   via `notebooklm/add_youtube_source` (one call per video URL)
+   via `mcp__notebooklm__add_youtube_source` (one call per video URL)
    - NotebookLM natively accepts YouTube URLs via `videoContent.youtubeUrl`
    - No transcript extraction needed at this stage — NotebookLM processes
      the video directly
 
 **Run structured extraction queries:**
 
-5. After sources are added, query the notebook via `notebooklm/query_notebook`
-   with these structured prompts (adapt domain name as needed):
+5. After sources are added, query the notebook via `mcp__notebooklm__ask_question`
+   with these structured prompts (adapt domain name as needed). Note: the
+   ask_question tool accepts a `notebook_id` or `notebook_url` parameter
+   — pass it explicitly rather than relying on the currently-selected
+   notebook, because each domain has its own:
 
    ```
    Q1: "What are the specific, falsifiable claims made across all sources

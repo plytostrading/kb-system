@@ -587,10 +587,25 @@ richer.
 
 **Access paths:**
 
-1. **Community MCP server** (PleasePrompto/notebooklm-mcp): 16 tools including
-   `list_notebooks`, `create_notebook`, `add_youtube_source`, `query_notebook`.
-   Uses browser cookies for authentication. Current recommended path for
-   individual use.
+1. **Community MCP server** (`notebooklm-mcp-ultimate`, kabuto-png/notebooklm-mcp-ultimate on GitHub):
+   ~44 tools including `create_notebook_remote`, `add_youtube_source`,
+   `add_url_source`, `add_text_source`, `ask_question`, `list_sources`,
+   `summarize_source`, and several research-assistance tools
+   (`discover_sources`, `research_topic`). Uses Playwright browser
+   automation for authentication — a real Chrome window opens for
+   Google login (MFA intact); session state is persisted locally. No
+   manual cookie export needed for interactive use. For headless /
+   server use, `GOOGLE_AUTH_COOKIES_PATH` points to a pre-exported
+   Playwright storageState JSON file.
+
+   Rate limit: NotebookLM's free tier allows ~50 queries/day per account.
+   `re_auth` lets you switch accounts when hitting the limit.
+
+   Previous recommendation (PleasePrompto/notebooklm-mcp v1.2.1, 16
+   tools) was read-only — no programmatic source addition — so
+   `add_youtube_source` from kb-absorb's design would not work against
+   it. kabuto-png/notebooklm-mcp-ultimate supersedes it for
+   pre-processing flows that need to add sources programmatically.
 
 2. **Official Enterprise API**: `notebooks.sources.batchCreate` supports YouTube
    URLs via `videoContent.youtubeUrl`. OAuth via gcloud. Requires Enterprise
@@ -1100,7 +1115,7 @@ MCP servers used by source adapters:
 |------------|-------------|-------|------------|-------------|
 | Scholar Gateway | paper, preprint | discovery | `semanticSearch` | None (Claude.ai integration) |
 | YouTube Data API (`@kirbah/mcp-youtube`) | youtube | discovery | `searchVideos`, `getVideoDetails`, `getChannelStatistics`, `getTranscripts` (fallback) | `YOUTUBE_API_KEY` |
-| NotebookLM (PleasePrompto) | youtube | pre-processing | `list_notebooks`, `create_notebook`, `add_youtube_source`, `query_notebook` | `GOOGLE_COOKIES` |
+| NotebookLM (`notebooklm-mcp-ultimate`) | youtube | pre-processing | `create_notebook_remote`, `add_youtube_source`, `add_url_source`, `ask_question`, `list_sources`, `summarize_source`, `discover_sources` (~44 tools total) | Interactive: Playwright browser auth via `setup_auth` tool (no env var). Headless: `GOOGLE_AUTH_COOKIES_PATH`. |
 | YouTube Transcript (`@kimtaeyoon83/mcp-server-youtube-transcript`) | youtube | extraction | `get_transcript` | None (public caption endpoints) |
 | Twitter/X (armatrix) | twitter | discovery + extraction | `search_tweets`, `get_tweet_thread`, `get_user_timeline` | `TWITTERAPI_KEY` |
 | WebSearch (built-in) | all types | discovery (fallback) | keyword search | None |
@@ -1154,8 +1169,8 @@ This file CAN be committed (no secrets, only variable references).
     },
     "notebooklm": {
       "command": "npx",
-      "args": ["-y", "notebooklm-mcp"],
-      "env": { "GOOGLE_COOKIES": "${GOOGLE_COOKIES}" }
+      "args": ["-y", "notebooklm-mcp-ultimate"],
+      "env": {}
     },
     "twitter": {
       "command": "npx",
@@ -1201,7 +1216,7 @@ this section and produces a service status report on every invocation.
 |---------|---------|---------------|
 | Fast.io | `FASTIO_TOKEN` | Fast.io dashboard → API Keys, or `fastio auth login` |
 | YouTube Data API | `YOUTUBE_API_KEY` | Google Cloud Console → APIs & Services → YouTube Data API v3 → Create Credentials → API Key (free tier: 10K units/day) |
-| NotebookLM (community MCP) | `GOOGLE_COOKIES` | Export Google account cookies via browser extension (e.g., EditThisCookie); see PleasePrompto/notebooklm-mcp README for format |
+| NotebookLM (community MCP, `notebooklm-mcp-ultimate`) | *(none for interactive use)* or `GOOGLE_AUTH_COOKIES_PATH` for headless | Interactive: run the `setup_auth` MCP tool once — Chrome opens, log in to Google normally (MFA supported), session state saved locally. No manual cookie export needed. Headless only: export a Playwright storageState JSON from a machine with a browser, copy to server, set the env var to the path. |
 | NotebookLM (Enterprise API) | — | `gcloud auth login` + Enterprise tier subscription; uses OAuth, not env vars |
 | Twitter/X reads | `TWITTERAPI_KEY` | twitterapi.io → Sign Up → Dashboard → API Key (~$0.15/1K calls) |
 | mem0 | `MEM0_API_KEY` | app.mem0.ai → Dashboard → API Keys. Use with the official HTTP MCP at https://mcp.mem0.ai/mcp — see §3.2. Do not use OAuth-based connectors. |

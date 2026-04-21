@@ -183,16 +183,33 @@ mcp_servers:
       populate the "Key Claims with timestamps" template. Falls back to
       WebFetch on the video page when unavailable (degraded).
 
-  # Optional — enable if you want premium NotebookLM enrichment for YouTube:
-  #
-  # notebooklm:
-  #   description: "NotebookLM pre-processing for YouTube content"
-  #   required: false
-  #   check_tool: "notebooklm/list_notebooks"
-  #   credentials:
-  #     - env: GOOGLE_COOKIES
-  #       how_to_get: "Export Google cookies; see notebooklm-mcp README"
-  #
+  notebooklm:
+    description: "NotebookLM pre-processing for YouTube (and other) sources"
+    required: false
+    # Canonical stdio MCP as of 2026-04: notebooklm-mcp-ultimate.
+    # Install: claude mcp add --scope user notebooklm --
+    #   npx -y notebooklm-mcp-ultimate
+    # Authentication: the MCP uses Playwright (patchright) to drive a
+    # real Chrome browser for login — no manual cookie export needed.
+    # First-time setup: in a Claude Code session, invoke the `setup_auth`
+    # tool. Chrome opens; log in to Google normally (MFA works). Session
+    # state is persisted locally to ~/.config/notebooklm-mcp/ or similar.
+    # For headless environments only: set GOOGLE_AUTH_COOKIES_PATH to a
+    # pre-exported storageState JSON file. Not required for interactive
+    # use.
+    credentials: []
+    notes: >
+      Provides create_notebook_remote, add_youtube_source, add_url_source,
+      ask_question, and ~40 other tools for notebook management and
+      research. Used by kb-absorb's NotebookLM Enrichment Flow (section
+      2a-YT). NotebookLM free tier rate-limits at ~50 queries/day per
+      account; the re_auth tool allows switching accounts to extend.
+      Quality observation: this is reverse-engineered browser automation,
+      not an official Google API — expect occasional breakage when Google
+      updates NotebookLM's UI. Fallback: if notebooklm is unavailable,
+      kb-absorb skips pre-processing and uses direct transcript extraction
+      only. Graceful degradation.
+
   # twitter:
   #   description: "Twitter/X search and thread retrieval"
   #   required: false
