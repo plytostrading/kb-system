@@ -127,9 +127,15 @@ the cwd field from the transcript itself).
 ### Step 2: Determine Capture Scope
 
 Read the bookmark from Fast.io via `workspace/read-note`:
-`{project_folder}/journal/.bookmark.yaml`.
+`{project_folder}/journal/bookmark.md`.
 
-Bookmark format:
+**Why `.md` not `.yaml`:** Fast.io's `workspace/create-note` requires a
+`.md` extension. Earlier drafts of this spec used `.bookmark.yaml`; in
+practice the skill must use a markdown filename. The YAML payload goes
+inside a fenced code block within the markdown file, like so:
+
+````markdown
+# Journal Bookmark — {project_name}
 
 ```yaml
 last_captured_at: "2026-04-21T08:00:00Z"
@@ -138,6 +144,10 @@ captured_session_ids:
   - "..."
 prompt_version_hash: "sha256:..."
 ```
+````
+
+Parsers: look for the first fenced ```yaml``` block in the file and
+parse that; ignore any surrounding prose.
 
 If bookmark doesn't exist → first run; create empty.
 
@@ -162,6 +172,40 @@ Process sessions sequentially (not parallel — distillation is
 stateful within a session).
 
 #### 3a: Extract Content from Transcript
+
+**Distillation-source strategy — reflexive beats retrospective for the
+current session.** Empirically, when the skill is invoked from within
+the session being captured, distilling from the agent's **working
+memory** produces higher-fidelity output than parsing the same
+session's JSONL. Working memory carries the agent's implicit arc
+(decision-and-revert structure, why alternatives were rejected, what
+the agent actually weighed) which the JSONL only encodes as a
+sequence of discrete thinking blocks requiring reconstruction.
+
+For each session:
+
+- **If session_id == current session's ID** → prefer working-memory
+  distillation. Use the JSONL only as a verification/fill-in source
+  for specific artifacts (tool call args, exact commit SHAs,
+  timestamps). Note in the distilled front-matter:
+  `distillation_source: working_memory+jsonl`.
+- **If session_id != current session** → retrospective distillation.
+  Parse the JSONL as the sole source. Fidelity will be lower —
+  decision-and-revert structure in thinking blocks is harder to
+  reconstruct than to recall. Note in front-matter:
+  `distillation_source: jsonl`.
+- **Context-window exhaustion warning.** A session that went through
+  one or more context compactions has lost thinking-block content in
+  the transcript itself (compaction replaces detailed reasoning with
+  a summary). Look for events of type `summarization` or gaps in
+  thinking-block timestamps; if present, tag the distilled note's
+  front-matter with `fidelity: degraded` and note the compaction
+  events in the Session Metadata Notes section of the output. For
+  affected sessions, ~3+ compactions is a qualitative threshold —
+  below that, fidelity is acceptable; above, explicitly caveat every
+  decision with "reconstructed" status.
+
+**JSONL parsing (all sessions, retrospective or for verification):**
 
 Use `Read` on the JSONL file. For large transcripts (>2000 lines),
 read in pages. Parse each line as JSON.
@@ -213,10 +257,13 @@ cwd: {path}
 projects_touched: [{list}]
 outcome: {success|partial|failed|unspecified}
 raw_available: {true|false}
+distillation_source: {working_memory+jsonl|jsonl}
+fidelity: {full|degraded}
 prompt_version_hash: sha256:{hash of this distillation prompt}
 thinking_block_count: {N}
 tool_call_count: {N}
 user_turn_count: {N}
+compaction_events: {N}
 ---
 
 # Session Journal — {date} — {one-line topic}
@@ -391,7 +438,14 @@ instructions. Applied in kb-system c9ed5cd.
 
 ### Step 6: Advance Bookmark
 
-Write updated bookmark via `workspace/update-note`:
+Write updated bookmark to
+`{project_folder}/journal/bookmark.md` via `workspace/update-note`
+(or `workspace/create-note` if this is the first capture). The file
+is markdown with a fenced YAML block inside — see the format note in
+Step 2.
+
+````markdown
+# Journal Bookmark — {project_name}
 
 ```yaml
 last_captured_at: {ISO-8601 now}
@@ -401,6 +455,7 @@ captured_session_ids:
 prompt_version_hash: sha256:{current prompt version}
 captured_session_count: {total}
 ```
+````
 
 If `prompt_version_hash` differs from the previous bookmark, log it
 — this is a prompt drift event and may warrant a meta-journal entry
@@ -408,7 +463,12 @@ describing what changed in the prompt.
 
 ### Step 7: Append Work Log + Report
 
-Append via `worklog/append`:
+Append via `worklog/append`. If the worklog endpoint is unavailable
+(5xx errors), fall back to appending an audit section to `hot.md` —
+see "Worklog Endpoint Fallback" below. The fallback must preserve the
+same semantic content (sessions/decisions/promotions counts and the
+journal-INDEX pointer) so future readers of either surface get the
+same record.
 
 ```
 [{project}] Capture complete. Sessions: {N} captured, {M} skipped (already indexed).
@@ -458,6 +518,44 @@ Next capture: run /kb-capture --project {project} --since last-capture
 - **When in doubt, include.** A slightly-too-long decision entry is
   recoverable; a missing decision is invisible after the raw transcript
   ages out.
+
+## Character Encoding Guidance
+
+Fast.io's `workspace/create-note` has tripped on doubly-encoded UTF-8
+escape sequences (e.g. `â` for U+2192 `→` arrow) — the
+validator rejects the malformed bytes. Two patterns that avoid it:
+
+1. **Prefer direct Unicode characters** in note content — write `→`,
+   not `→`. If the writing tool's string escaping cannot be
+   controlled, fall back to (2).
+2. **Prefer ASCII substitutes** when Unicode won't round-trip —
+   `->` for `→`, `--` for `—`, `"..."` for `"…"`. Slightly less
+   typographically pleasing; guaranteed to write.
+
+This applies to journal note bodies, front-matter values, and anything
+written via `workspace/create-note` / `workspace/update-note`. Bookmark
+files inherit the same constraint.
+
+## Worklog Endpoint Fallback
+
+If `worklog/append` returns a 5xx error (observed as a persistent 500
+response against Fast.io during the first real-world exercise of this
+skill — tracked as a Fast.io upstream issue, not a skill bug), fall
+back to writing the worklog entry as an audit section appended to
+`{project_folder}/hot.md`:
+
+```markdown
+## Capture Audit — {date} (worklog-unavailable fallback)
+- Sessions captured: {N}
+- Decisions extracted: {N}
+- mem0 promotions: {N}
+- See detail in journal/INDEX.md
+```
+
+This preserves the work-log semantics (timestamped record of activity)
+even when the dedicated worklog endpoint is unavailable. On the next
+capture, retry `worklog/append` first; only fall back if it still
+errors.
 
 ## Credit Awareness
 
