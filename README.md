@@ -183,6 +183,14 @@ you add upgrades the quality of a specific source type:
 - **[Product Strategy](docs/product/)** — Market trajectory, MCP-native architecture,
   business models, and knowledge graph monetization design
 
+## Contributing
+
+- **[Contributing guide](CONTRIBUTING.md)** — commit message conventions
+  (including the detailed Context / Decisions / Chain-of-reasoning /
+  Implications template), when to use the full form vs a shorter form,
+  and how to enable the pre-populated commit template
+  (`.gitmessage.template`) in your local checkout.
+
 ## License
 
 MIT

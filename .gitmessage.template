@@ -1,0 +1,54 @@
+# <type>(<scope>): <subject — under ~70 chars, active voice, no period>
+#
+# Conventional prefixes: feat | fix | docs | chore | refactor | test | build | ci
+# Scope is optional and short (e.g. mem0, install, journal, kb-capture).
+#
+# ════════════════════════════════════════════════════════════════════════════
+# The body — write enough context that a future reader can understand
+# the WHY without archaeology. Sections are optional; omit what's empty.
+# Delete these instructional comments before committing.
+# ════════════════════════════════════════════════════════════════════════════
+
+## Context
+# What was the situation that prompted this work? Prior state,
+# symptoms, motivating evidence. The "why do anything at all" section.
+
+## Decisions
+# What specific choices were made? What alternatives were considered
+# and rejected? The "why this approach, not another" section.
+
+## Chain of reasoning
+# How did context → decisions? Concrete findings, diagnostics, logic.
+# The "how did we know" section. Fine to include URLs, file:line refs,
+# commit SHAs, or sample output here.
+
+## Implementation
+# Prose mirror of the diff at the level of "what changed where."
+# Brief — the diff itself is the source of truth for line-level detail.
+
+## Implications
+# What does this change enable, prevent, or affect downstream?
+# First-order consequences (direct). Second-order (indirect / future
+# users). Third-order (systemic / emergent) when relevant.
+# Note any required user actions (rotate a key, restart something,
+# run a migration).
+
+## References
+# Related commits (short SHA + one-line purpose), docs paths,
+# external URLs, issue/ticket numbers if tracked elsewhere.
+
+# ════════════════════════════════════════════════════════════════════════════
+# When to use the full template vs a shorter form
+# ════════════════════════════════════════════════════════════════════════════
+# Use the full template when: architectural decisions; cross-cutting
+#   fixes; investigations where the diagnostic path is valuable;
+#   changes a future reader will want to reconstruct.
+#
+# Use a shorter form (subject + 1-paragraph body) when: typos;
+#   formatting-only; lint fixes; trivial config bumps; incremental
+#   commits within a feature arc whose context lives in the epic's
+#   first commit.
+#
+# The template is a ceiling, not a floor. When empty sections outnumber
+# filled ones, delete the template comments and write a short
+# paragraph instead.
