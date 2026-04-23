@@ -155,18 +155,33 @@ mcp_servers:
     description: "YouTube search, video metadata, channel info (Data API v3)"
     required: false
     # The canonical stdio MCP as of 2026-04: @kirbah/mcp-youtube.
-    # Install: claude mcp add --scope user youtube-api -- npx -y @kirbah/mcp-youtube
-    # Reads YOUTUBE_API_KEY from Claude Code's process env (set in
-    # ~/.claude/settings.json under the "env" block — NOT via shell rc).
+    # IMPORTANT: install with explicit -e flag so the subprocess sees the
+    # API key. Claude Code's ~/.claude/settings.json `env` block populates
+    # Claude Code's own process environment but does NOT propagate to
+    # stdio MCP subprocesses for this package (empirically verified
+    # 2026-04-23). Without an explicit -e, the MCP's gating logic sees
+    # no YOUTUBE_API_KEY and registers only `getTranscripts` (0-quota tool
+    # that doesn't need auth).
+    #
+    # Correct install command:
+    #   export YOUTUBE_API_KEY=AIza...   # transient; just needs to be in
+    #                                    # the shell when running the next line
+    #   claude mcp add -e "YOUTUBE_API_KEY=${YOUTUBE_API_KEY}" \
+    #     --scope user youtube-api -- npx -y @kirbah/mcp-youtube
+    #   unset YOUTUBE_API_KEY            # key is now baked into ~/.claude.json
     credentials:
       - env: YOUTUBE_API_KEY
         how_to_get: "https://console.cloud.google.com → YouTube Data API v3 → Credentials → Create API Key"
     notes: >
-      Exposes tools for searchVideos, getVideoDetails, getChannelStatistics,
-      getTrendingVideos, and getTranscripts. Search tools cost 100 quota
-      units per call; metadata tools cost 1 unit; transcripts are free.
-      Daily free quota is 10,000 units. See @kirbah/mcp-youtube README for
-      the full tool list.
+      Exposes 8 tools when YOUTUBE_API_KEY is set (searchVideos,
+      getVideoDetails, getChannelStatistics, getChannelTopVideos,
+      getVideoComments, getTrendingVideos, getVideoCategories,
+      getTranscripts) plus 1 more if MongoDB is also configured
+      (findConsistentOutlierChannels). Without the key, only
+      getTranscripts registers. Search tools cost 100 quota units;
+      metadata tools cost 1 unit; transcripts are free. Daily free
+      quota is 10,000 units. No playlist tools. No "related videos"
+      tool — approximate via tag-matched searchVideos (~101 units).
 
   youtube_transcript:
     description: "YouTube transcript extraction (captions, multi-language, ads-filtered)"
