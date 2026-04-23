@@ -439,6 +439,118 @@ third-party tools (e.g. your IDE's local chat history). It reads
 Claude Code's own transcripts and nothing else. See `kb-capture.md`
 for the complete behavior spec.
 
+### 3.5 Active Journaling via kb-note — Vendor-Independent Capture
+
+**Why this exists.** §3.4's retrospective distillation depends on
+Claude Code writing thinking content to its JSONL. When Claude Code
+2.1.116+ silently redacted that content (2026-04-23 decisions log
+entry), retrospective distillation for affected sessions lost its
+richest input. Active journaling is the resilient alternative:
+instead of reconstructing reasoning from transcripts after the fact,
+agents (and users) record decisions AS they're made, writing
+directly to Fast.io through our own skill surface — no dependency
+on any vendor's internal representation.
+
+**Layered design (the "Framing C" architectural choice,
+2026-04-23):** kb-system now has THREE capture paths, each
+reinforcing the others:
+
+1. **Active journaling** (`kb-note` — primary path for decisions
+   made under post-2.1.116 Claude Code). Agents invoke kb-note
+   during sessions via the Skill tool; users can invoke via
+   `/kb-note --project X --type decision ...`. Entries are written
+   immediately to `{project_folder}/journal/notes/` as individual
+   markdown files with structured front-matter. `fidelity: full`
+   is guaranteed because the agent's in-context reasoning is the
+   source.
+2. **Retrospective distillation** (`kb-capture` — unchanged;
+   catches what active journaling missed). Runs end-of-session or
+   during the next `/kb-review`. Reads JSONL + any terminal
+   captures + existing active notes for the same session. Writes a
+   session-summary note that adds narrative arc and flags
+   decisions inferred from tool calls but not actively journaled.
+   Fidelity depends on Claude Code version and whether terminal
+   capture was used.
+3. **Terminal capture** (forensic fallback). `script(1)`,
+   `asciinema`, or `tmux pipe-pane` wraps the claude CLI at
+   launch. Captures what renders on the terminal, which — when
+   verbose mode is on — includes thinking. v1 kb-capture reads
+   JSONL only; a future version will consume terminal captures as
+   an additional source.
+
+No single capture path can fail silently: if the vendor changes
+JSONL format again, active notes survive. If the agent forgets to
+invoke kb-note, retrospective distillation catches up. If both
+fail (future vendor change + agent discipline collapse), terminal
+capture is the forensic last resort.
+
+**Entry types in active notes.** Four type values with distinct
+templates:
+
+- `decision` — choice among alternatives, weighed trade-offs
+- `diagnostic` — non-obvious observation that forces decisions
+  elsewhere
+- `insight` — generalizable pattern or principle (auto-promoted
+  to mem0)
+- `open_thread` — unresolved question parked for future resumption
+
+Templates are codified in the `kb-note` skill body so the agent
+produces structurally consistent entries without per-invocation
+schema lookup.
+
+**Storage structure.** Active notes live at one file per decision:
+`{project_folder}/journal/notes/{YYYY-MM-DD}-{session_id8}-{seq:03d}-{slug}.md`.
+This coexists with retrospective session summaries at
+`{project_folder}/journal/{YYYY-MM-DD}-{session_id}-distilled.md`.
+INDEX.md links both in a unified view; the `distillation_source`
+front-matter field (`active` vs `jsonl` vs `working_memory+jsonl`)
+lets readers filter by provenance.
+
+**mem0 promotion policy.** Only `insight` entries auto-promote to
+mem0 on write, tagged `[{project_name}][JOURNAL-{date}]`. The
+other three types stay local to Fast.io — they're discoverable via
+semantic search but don't elevate to the project-wide recall layer.
+Rationale: mem0 is for cross-session, cross-domain pattern-matching;
+specific decisions and diagnostics don't meet that bar.
+
+**Coherence with kb-capture (Q3 = both always run):** when both
+paths execute for the same session, active notes are AUTHORITATIVE
+for the decisions they cover, and retrospective distillation adds
+the narrative arc + catches missed decisions. The two are never in
+conflict over the same decision because the distillation prompt is
+kb-capture-side aware of existing active notes and deliberately
+doesn't re-emit them.
+
+**What active journaling requires that retrospective doesn't.**
+Agent discipline. Without a CLAUDE.md instruction or project
+convention that tells agents to invoke kb-note during work, active
+journaling degenerates to "happens when the user remembers." To
+keep the active path effective, project CLAUDE.md files should
+include something like:
+
+```
+When making a non-trivial decision during work on this project,
+invoke `/kb-note --project {name} --type decision --title "..."`
+with the decision details. Non-trivial means: choosing among
+≥2 considered alternatives, reversing a prior choice, or any
+decision with implications beyond the immediate change.
+```
+
+The kb-note skill body documents the invocation criteria in more
+detail; CLAUDE.md just points at it.
+
+**Future extensions** (not in v1):
+
+- MCP tool variant (`mcp__kb__record_decision`) for strict
+  schema enforcement at call time, rather than prompt-level
+  enforcement. Would require building a small MCP server; v1
+  uses skill-level enforcement which catches ~95% of cases at
+  ~20% of the build cost.
+- Terminal-capture reader in kb-capture, so `.typescript` /
+  `.cast` files are consumed as supplementary source.
+- Weighted-trust retrieval in kb-assess, using `distillation_source`
+  + `fidelity` + `outcome` to filter or boost journal context.
+
 ## 4. Project Manifests
 
 All project-specific knowledge lives in **project manifest** files — YAML
@@ -1312,3 +1424,4 @@ upgrades one or more source adapters from fallback to preferred path.
 | 2026-04-14 | Zero-cost mem0 availability (replaces lazy auth, cooldown file, status propagation) | Previous approach (lazy auth + cooldown file + cross-skill propagation) still caused account lockouts because probe calls and MCP server connection-level auth accumulated. New approach: skills check the tool registry for mem0 data tools — a local lookup with zero network traffic, zero auth attempts. If data tools exist → authenticated, use freely. If only authenticate/complete_authentication exist → not authenticated, skip entirely. Authentication is user-initiated only. Removed: cooldown files, `--mem0-status` argument, cross-skill propagation, probing logic |
 | 2026-04-21 | Session journaling as a new artifact class | Claude Code writes per-project transcripts (JSONL) to `~/.claude/projects/{sanitized-cwd}/` including extended-thinking blocks. Those blocks are the richest record of WHY choices were made and evaporate when sessions age out. `kb-capture` reads transcripts, distills via a versioned prompt, writes a structured journal note to `{project_folder}/journal/`, promotes 2–3 highest-signal insights to mem0, and adds a "Recent decisions" section to hot.md. Raw dumps are opt-in via `--raw` (forensic use only, not RAG-indexed by default) because their ingestion cost is much higher than distilled notes. Category 10 lint monitors uncaptured-session debt. Privacy: thinking tokens are uploaded verbatim; `journal.redact_patterns` in the manifest is a future extension point. First-order win: decisions become queryable across sessions. Second-order: agents onboarding to a project can prime on hot.md's Recent Decisions section. Third-order: over months the journal becomes a compliance-grade record of design intent |
 | 2026-04-23 | Thinking-tokens redaction forces reflexive-or-terminal-capture path | Claude Code ≈2.1.116 silently changed the JSONL writer to redact `thinking` block contents, keeping only the `signature` field (opaque Anthropic-encrypted protobuf for session-resume, not client-decodable). Empirically verified: `--debug api --debug-file` does not recover pre-redaction thinking either — the capture layer sits below the redaction. Consequence for kb-capture: reflexive distillation (from working memory during the session) remains full-fidelity, retrospective distillation of pre-2.1.116 sessions remains full-fidelity, but retrospective distillation of post-2.1.116 sessions is structurally degraded unless the session was launched under `script(1)` / `asciinema` / `tmux pipe-pane`. Skill updated to detect the redaction (thinking=empty + signature=long) and tag `fidelity: degraded` accordingly. Future kb-capture version will consume terminal-capture artifacts as an additional distillation source; v1 reads JSONL only and reports the degradation honestly. First-order: any post-2.1.116 session without a terminal capture arrangement loses its reasoning trace permanently. Second-order: the `fidelity` front-matter field on journal entries becomes semantically meaningful for downstream weighted-trust retrieval. Third-order: documents a real-world risk of depending on another vendor's internal data representations — even an undocumented, silent client-side change can break a downstream consumer's whole value proposition |
+| 2026-04-23 | Active journaling via kb-note as primary path (Framing C — layered capture) | Thinking redaction reframed the journaling design: retrospective distillation alone is structurally vulnerable to vendor data-representation changes. Framing C resolves this by making active journaling the primary path, with retrospective distillation and terminal capture as overlapping backups. New skill `kb-note` lets agents (via Skill tool) and users (via slash command) record individual decisions/diagnostics/insights/open-threads to Fast.io during sessions — `{project}/journal/notes/{date}-{sid8}-{seq}-{slug}.md` per entry. Four entry-type templates enforce structural consistency via skill prompt. `insight` entries auto-promote to mem0; others stay local. Q1=C (both slash command and programmatic invocation, unified skill). Q2=A (file per decision — enables independent linking/deletion). Q3=A (retrospective always runs as catch-up and narrative-arc view, aware of existing active notes to avoid duplication). MCP tool variant deferred to v2 if schema drift becomes observable. First-order: reasoning is preserved at decision-time, independent of vendor representation choices. Second-order: journal quality stops being a function of Claude Code's version. Third-order: establishes "own the capture path" as a durable design principle for future kb-system integrations — don't depend on internal representations we don't control |

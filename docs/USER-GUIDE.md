@@ -1173,6 +1173,131 @@ than the live session produced**
 
 ---
 
+## 12c. Active journaling with `/kb-note`
+
+`/kb-capture` (§12b) captures session reasoning *retrospectively* by
+reading the JSONL transcript. That path depends on Claude Code
+writing thinking content to disk — which it silently stopped doing
+at version 2.1.116+. `/kb-note` is the complementary *active*
+journaling path: the agent (or you) records a decision at the moment
+it's made, writing directly to Fast.io under your control. Together
+they form kb-system's layered journaling architecture (Framing C —
+see ARCHITECTURE.md §3.5).
+
+### Quick start
+
+The primary use is **programmatic invocation by the agent during
+development work**. For that to happen, your project's CLAUDE.md
+should include an instruction like:
+
+```markdown
+## Active journaling
+When making a non-trivial decision during work on this project,
+invoke `/kb-note --project my-project --type decision --title "..."`
+before moving on. Non-trivial means: choosing among ≥2 alternatives,
+reversing a prior choice, or any decision with implications beyond
+the immediate change. See kb-system skills/kb-note.md for entry
+structure and guidance on when to invoke.
+```
+
+You can also invoke it manually:
+
+```
+/kb-note --project my-project --type decision --title "Migrate to async-first API"
+```
+
+then provide the body following the per-type template below.
+
+### Four entry types
+
+| type | when to use | key sections |
+|------|-------------|--------------|
+| `decision` | choosing among alternatives with trade-offs | Context / Decision / Alternatives / Rationale / Artifacts / Related / Implications |
+| `diagnostic` | non-obvious observation that forces decisions | Observation / Implication / Action / Artifacts |
+| `insight` | generalizable pattern worth cross-session recall | Pattern / Example / Applies when / Counterexamples |
+| `open_thread` | unresolved question parked for later | Question / Attempted / Blocker / Resumption plan |
+
+Only `insight` entries auto-promote to mem0. The other three stay
+local to Fast.io (still semantically searchable via the KB, just
+not elevated to mem0's project-wide recall layer).
+
+### What gets written
+
+One file per entry in `{project}/journal/notes/`:
+
+```
+2026-04-23-7d26f67a-001-migrate-to-async-first-api.md
+2026-04-23-7d26f67a-002-observation-race-in-worker-pool.md
+2026-04-23-7d26f67a-003-insight-tool-registry-binding-happens-at-session-start.md
+```
+
+The filename encodes date + session_id prefix + sequence + slug,
+sortable and searchable. Front-matter includes `type`, `seq`,
+`session_id`, `title`, `distillation_source: active`, and
+`fidelity: full`.
+
+The journal `INDEX.md` gains an "Active Notes" section listing all
+entries; `hot.md` gets a "Recent decisions" section that kb-assess
+reads as Layer 1 context on every review.
+
+### Interaction with `/kb-capture`
+
+Both paths always run (per the 2026-04-23 design decision). When
+they cover the same session:
+
+- **Active notes are authoritative** for decisions they cover.
+- **Retrospective session summary** (kb-capture's output) adds
+  the narrative arc and flags any decisions it inferred from the
+  tool arc but didn't find in active notes — i.e., "what the agent
+  forgot to actively journal."
+- **Readers can cross-reference** by matching `session_id` across
+  the two artifact types.
+
+No duplication: the kb-capture distillation prompt is aware of
+existing active notes and deliberately excludes their decisions
+from its own Decisions list.
+
+### Scheduling guidance
+
+Invoke kb-note:
+
+- **Immediately after a decision is made**, before moving on
+- **When diagnosing a non-obvious failure** (observation +
+  implication pair is gold for future debugging)
+- **When a generalizable pattern surfaces** (auto-promoted to
+  mem0 for cross-session recall)
+- **When parking an unresolved question**
+
+Do NOT invoke:
+
+- After every tool call (too noisy)
+- For routine lookups, boilerplate, or simple fixes
+- When the reasoning doesn't meet the "worth preserving" bar
+
+The rhythm should match "moments a careful engineer would write
+down a note for their future self" — not comprehensive
+transcription.
+
+### Troubleshooting
+
+**"No active notes visible in INDEX after session"** — the agent
+likely wasn't prompted to invoke kb-note during the session. Either
+(a) add the CLAUDE.md instruction above so future sessions
+self-prompt, or (b) invoke kb-note manually for the specific
+decisions you want recorded before closing the session.
+
+**"kb-note reports validation error"** — the body didn't match the
+per-type template. The skill does not silently accept malformed
+bodies — the quality floor is preserved at write time. Fix the
+body to include all required sections and retry.
+
+**"Active notes written but not visible in hot.md"** — the hot.md
+update step may have failed (Fast.io 5xx). Retrospective
+distillation during the next kb-capture / kb-review cycle will
+reconcile. Or manually re-run kb-note for the missing entry.
+
+---
+
 ## 13. Moving or Reorganizing Repos
 
 ### Moving the KB System repo
@@ -1513,3 +1638,19 @@ brew install python3
 | `--raw` | *(flag)* | off | Also persist verbatim raw dumps (costs more credits) |
 | `--outcome` | `success`, `partial`, `failed` | *(unspecified)* | Tag captured sessions for future weighting |
 | `--cross-project` | *(flag)* | off | Include transcripts from other project directories |
+
+### `/kb-note` — Active journaling (record single decision / diagnostic / insight / open-thread)
+
+```
+/kb-note --project <name> --type <type> --title "<title>"
+<body following per-type template>
+```
+
+| Flag | Values | Default | Description |
+|------|--------|---------|-------------|
+| `--project` | manifest name | required | Which project |
+| `--type` | `decision`, `diagnostic`, `insight`, `open_thread` | required | Entry type (determines body template) |
+| `--title` | short imperative title | required | Under ~70 chars; becomes filename slug + INDEX row |
+
+Body templates by type — see USER-GUIDE §12c. Only `insight` entries
+auto-promote to mem0.
