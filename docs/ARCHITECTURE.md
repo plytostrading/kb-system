@@ -326,10 +326,52 @@ state to project-scoped KB memory.
 transcripts to `~/.claude/projects/{sanitized-cwd}/{session_id}.jsonl`.
 Each line is a JSON event. Assistant messages have content blocks of
 type `text`, `tool_use`, and (when extended thinking is enabled)
-`thinking`. The thinking blocks contain the agent's internal reasoning
-— diagnosis, decision deliberation, self-correction, plan revision.
-These blocks are the primary raw material the `kb-capture` skill
-consumes.
+`thinking`. The thinking blocks once contained the agent's internal
+reasoning — diagnosis, decision deliberation, self-correction, plan
+revision — and were the primary raw material the `kb-capture` skill
+consumed.
+
+**Environmental caveat — Claude Code 2.1.116+ redacts thinking at
+write-time.** As of Claude Code ≈2.1.116 (April 2026, changed
+silently — not in any changelog entry), every `thinking` content
+block written to the JSONL is stripped to empty string, leaving only
+the `signature` field (500–32K-byte Anthropic-encrypted protobuf for
+server-side session-resume forward-chaining). Signatures are opaque
+and not client-decodable; `--debug api --debug-file` operates at a
+layer below the redaction and does not recover pre-redaction content
+(empirically verified). This silently degrades retrospective
+distillation quality for any session run under post-2.1.116 Claude
+Code.
+
+Operationally:
+
+- **Reflexive distillation** (kb-capture invoked from within the
+  session being captured) is UNAFFECTED — it uses the agent's own
+  working memory, which never touches the redaction path. Remains
+  the highest-fidelity mode.
+- **Retrospective distillation** of pre-2.1.116 sessions is
+  UNAFFECTED — those JSONLs have cleartext thinking.
+- **Retrospective distillation** of post-2.1.116 sessions is
+  DEGRADED — only user turns, assistant text, tool calls, and tool
+  results survive; thinking is gone.
+
+**Recovery path for post-2.1.116 retrospective distillation:**
+terminal capture at launch. `script(1)` or `asciinema` preserves
+what appears on the terminal; when Claude Code runs in verbose mode
+(Ctrl+O), thinking IS rendered to the terminal and therefore
+captured. A future kb-capture version will consume terminal-capture
+files as an additional distillation source; v1 reads only JSONL.
+Recommended launch wrapper (put in shell rc):
+
+```
+alias claude='script -q -f -c claude ~/.claude-captures/$(date +%F-%H%M%S).typescript'
+```
+
+Journaling skill behavior when encountering redacted sessions: tag
+`fidelity: degraded` on the distilled note's front-matter; surface
+the redaction explicitly in the Session Metadata Notes section so
+future readers understand why the decision count is lower than the
+live session produced.
 
 **How it's stored.** `kb-capture` produces two artifact classes per
 session:
@@ -1269,3 +1311,4 @@ upgrades one or more source adapters from fallback to preferred path.
 | 2026-04-13 | Write-through buffer for mem0 | Failed mem0 writes buffer to Fast.io `{project_folder}/mem0-pending.md` instead of being lost. Queue flushed by `kb-refresh --flush-mem0`. Category 9 lint monitors queue depth. Zero data loss even with prolonged mem0 outage |
 | 2026-04-14 | Zero-cost mem0 availability (replaces lazy auth, cooldown file, status propagation) | Previous approach (lazy auth + cooldown file + cross-skill propagation) still caused account lockouts because probe calls and MCP server connection-level auth accumulated. New approach: skills check the tool registry for mem0 data tools — a local lookup with zero network traffic, zero auth attempts. If data tools exist → authenticated, use freely. If only authenticate/complete_authentication exist → not authenticated, skip entirely. Authentication is user-initiated only. Removed: cooldown files, `--mem0-status` argument, cross-skill propagation, probing logic |
 | 2026-04-21 | Session journaling as a new artifact class | Claude Code writes per-project transcripts (JSONL) to `~/.claude/projects/{sanitized-cwd}/` including extended-thinking blocks. Those blocks are the richest record of WHY choices were made and evaporate when sessions age out. `kb-capture` reads transcripts, distills via a versioned prompt, writes a structured journal note to `{project_folder}/journal/`, promotes 2–3 highest-signal insights to mem0, and adds a "Recent decisions" section to hot.md. Raw dumps are opt-in via `--raw` (forensic use only, not RAG-indexed by default) because their ingestion cost is much higher than distilled notes. Category 10 lint monitors uncaptured-session debt. Privacy: thinking tokens are uploaded verbatim; `journal.redact_patterns` in the manifest is a future extension point. First-order win: decisions become queryable across sessions. Second-order: agents onboarding to a project can prime on hot.md's Recent Decisions section. Third-order: over months the journal becomes a compliance-grade record of design intent |
+| 2026-04-23 | Thinking-tokens redaction forces reflexive-or-terminal-capture path | Claude Code ≈2.1.116 silently changed the JSONL writer to redact `thinking` block contents, keeping only the `signature` field (opaque Anthropic-encrypted protobuf for session-resume, not client-decodable). Empirically verified: `--debug api --debug-file` does not recover pre-redaction thinking either — the capture layer sits below the redaction. Consequence for kb-capture: reflexive distillation (from working memory during the session) remains full-fidelity, retrospective distillation of pre-2.1.116 sessions remains full-fidelity, but retrospective distillation of post-2.1.116 sessions is structurally degraded unless the session was launched under `script(1)` / `asciinema` / `tmux pipe-pane`. Skill updated to detect the redaction (thinking=empty + signature=long) and tag `fidelity: degraded` accordingly. Future kb-capture version will consume terminal-capture artifacts as an additional distillation source; v1 reads JSONL only and reports the degradation honestly. First-order: any post-2.1.116 session without a terminal capture arrangement loses its reasoning trace permanently. Second-order: the `fidelity` front-matter field on journal entries becomes semantically meaningful for downstream weighted-trust retrieval. Third-order: documents a real-world risk of depending on another vendor's internal data representations — even an undocumented, silent client-side change can break a downstream consumer's whole value proposition |

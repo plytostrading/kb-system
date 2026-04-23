@@ -182,28 +182,74 @@ session's JSONL. Working memory carries the agent's implicit arc
 the agent actually weighed) which the JSONL only encodes as a
 sequence of discrete thinking blocks requiring reconstruction.
 
-For each session:
+**Critical constraint — Claude Code 2.1.116+ redacts thinking at
+write-time.** As of Claude Code version 2.1.116 (released mid-April
+2026, silently — not in any changelog), every `thinking` content
+block written to the JSONL is stripped to empty string, leaving only
+the `signature` field (a 500–32K-byte Anthropic-encrypted protobuf
+used for server-side session-resume forward-chaining). Signatures
+are opaque and not client-decodable. No hook event receives the
+pre-redaction thinking, and `--debug api --debug-file` operates at a
+layer below the redaction — empirically verified to produce zero
+`"type":"thinking"` blocks in the debug log.
 
-- **If session_id == current session's ID** → prefer working-memory
-  distillation. Use the JSONL only as a verification/fill-in source
-  for specific artifacts (tool call args, exact commit SHAs,
-  timestamps). Note in the distilled front-matter:
-  `distillation_source: working_memory+jsonl`.
-- **If session_id != current session** → retrospective distillation.
-  Parse the JSONL as the sole source. Fidelity will be lower —
-  decision-and-revert structure in thinking blocks is harder to
-  reconstruct than to recall. Note in front-matter:
-  `distillation_source: jsonl`.
-- **Context-window exhaustion warning.** A session that went through
-  one or more context compactions has lost thinking-block content in
-  the transcript itself (compaction replaces detailed reasoning with
-  a summary). Look for events of type `summarization` or gaps in
-  thinking-block timestamps; if present, tag the distilled note's
-  front-matter with `fidelity: degraded` and note the compaction
-  events in the Session Metadata Notes section of the output. For
-  affected sessions, ~3+ compactions is a qualitative threshold —
-  below that, fidelity is acceptable; above, explicitly caveat every
-  decision with "reconstructed" status.
+**Detecting the redaction in practice:** a JSONL thinking block with
+`thinking: ""` AND `signature: <long hex>` means the content was
+redacted at write-time. Count such blocks and record them as
+`compaction_events` proxy — they represent the same thing operationally
+(thinking is gone; only outcomes survive).
+
+**Recovery path forward** (for any session you expect to distill
+retrospectively): terminal capture at launch, before the session
+starts. `script(1)` or `asciinema` preserve what appears on-screen —
+if verbose mode (Ctrl+O) is enabled, thinking *is* rendered to the
+terminal. Example:
+
+```
+# Make every Claude Code launch recoverable:
+alias claude='script -q -f -c claude ~/.claude-captures/$(date +%F-%H%M%S).typescript'
+# Or, for a cleaner replayable format:
+alias claude='asciinema rec -c claude ~/.claude-captures/$(date +%F-%H%M%S).cast'
+```
+
+If terminal captures exist for a session, kb-capture (future version)
+can consume them as an additional distillation source. v1 looks at
+JSONL only.
+
+**For each session being captured, classify its distillation source:**
+
+- **Session is the currently-executing one** (reflexive):
+  - → prefer working-memory distillation. Use the JSONL only for
+    specific artifacts (tool call args, commit SHAs, timestamps).
+  - → Front-matter: `distillation_source: working_memory+jsonl`,
+    `fidelity: full` (reflexive distillation has access to reasoning
+    the JSONL never had, redaction notwithstanding).
+- **Session is historical, pre-2.1.116 Claude Code** (retrospective,
+  thinking present):
+  - → Parse the JSONL as a rich source. Thinking blocks have
+    cleartext content. Reconstruction is possible.
+  - → Front-matter: `distillation_source: jsonl`, `fidelity: full`.
+- **Session is historical, post-2.1.116 Claude Code** (retrospective,
+  thinking redacted — the common case going forward):
+  - → Parse the JSONL for user turns, assistant text output, tool
+    calls, and tool results. Thinking is gone.
+  - → If a terminal capture (script/asciinema/tmux pipe-pane) exists
+    for the session, use it as supplementary source and upgrade
+    fidelity accordingly.
+  - → Front-matter: `distillation_source: jsonl`, `fidelity: degraded`,
+    and set `compaction_events` to the count of redacted-thinking
+    blocks. This is NOT the same semantics as
+    context-window compaction, but operationally it's the same
+    signal: reasoning that happened is no longer recoverable. Surface
+    this explicitly in the Session Metadata Notes section of the
+    distilled output so readers understand why the retrospective
+    note has fewer decisions than the live session produced.
+- **Session went through context-window compactions** (orthogonal
+  to the redaction issue):
+  - → Additionally tag `fidelity: degraded` if ≥3 compaction events.
+  - → Each compaction event replaced detailed thinking with a
+    summary; decisions from within that summary window will be
+    less recoverable even from terminal captures.
 
 **JSONL parsing (all sessions, retrospective or for verification):**
 

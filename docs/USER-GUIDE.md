@@ -1117,6 +1117,51 @@ If this is a concern:
   transcripts don't contain thinking blocks, only tool calls and text
 - A failed/confused session distills into a thin journal by design;
   tag with `--outcome failed` to flag it for future weighting
+- **Most common cause on Claude Code 2.1.116+:** thinking is
+  redacted at write-time. See next item.
+
+**Retrospective journal has `fidelity: degraded` and fewer decisions
+than the live session produced**
+
+- **Cause:** Claude Code 2.1.116 (≈April 2026) silently changed the
+  JSONL writer to redact `thinking` block contents, keeping only the
+  `signature` envelope. Signatures are opaque encrypted protobufs
+  (server-side session-resume tokens); they are not client-decodable.
+  Retrospective distillation therefore loses access to the reasoning
+  that happened in the session. No Claude Code flag
+  (`--debug`, `--verbose`, hooks) recovers the pre-redaction content —
+  the redaction happens below the debug logger.
+- **Verify the pattern:** open the session's JSONL and grep for
+  `"type":"thinking"`. If every such block has `"thinking":""` with
+  a long `"signature":"..."` field, the session's thinking is gone.
+- **Recovery for future sessions — terminal capture at launch:**
+  ```
+  # Put in your ~/.bashrc or ~/.zshrc:
+  alias claude='script -q -f -c claude ~/.claude-captures/$(date +%F-%H%M%S).typescript'
+
+  # Or, for a nicer replayable format:
+  alias claude='asciinema rec -c claude ~/.claude-captures/$(date +%F-%H%M%S).cast'
+
+  # Or if you live in tmux, pipe-pane the active window:
+  tmux pipe-pane -o 'cat >> ~/.claude-captures/#S-#W.log'
+  ```
+  These capture what appears on-screen, which — when verbose mode
+  (Ctrl+O inside Claude Code) is on — includes rendered thinking.
+  v1 kb-capture reads JSONL only; a future version will consume
+  terminal-capture files as an additional distillation source.
+- **Recovery for past sessions:** not possible from the JSONL alone.
+  If you happen to have a tmux scrollback buffer still open on the
+  session in question, `tmux capture-pane -p -S -1000000 >
+  /tmp/scrollback.log` preserves it before it rotates. If the
+  session's thinking matters enough to justify setup, an HTTPS MITM
+  proxy (mitmproxy at `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`)
+  can log unredacted bodies going forward — but that's overkill for
+  most users.
+- **Most pragmatic response:** accept the loss for past sessions,
+  set up terminal capture for future, and use reflexive distillation
+  (run /kb-capture from *within* the session you want captured)
+  whenever full fidelity matters. Reflexive mode uses the agent's
+  working memory and is unaffected by the redaction.
 
 **Credit usage spike**
 
