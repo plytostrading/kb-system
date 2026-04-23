@@ -551,6 +551,121 @@ detail; CLAUDE.md just points at it.
 - Weighted-trust retrieval in kb-assess, using `distillation_source`
   + `fidelity` + `outcome` to filter or boost journal context.
 
+### 3.6 YouTube Channel Model & Video-Driven Discovery
+
+**Why this exists.** The earlier YouTube integration was per-video
+transactional: discover, absorb, write a source note. Channels
+existed only as plain strings in the manifest's `seed_channels`
+list. This meant you couldn't query "what channels does the KB
+know about?", couldn't accumulate per-channel metadata
+(productivity, quality signal, topics), and couldn't expand the
+corpus using the graph structure of YouTube (same-creator recent
+uploads, related videos). Section 3.6 lifts channels to a
+first-class artifact class and adds a channel-scoped discovery
+round.
+
+**Artifact layout:**
+
+```
+{project}/
+  channels/
+    INDEX.md                       # roster (active + deprecated)
+    {handle-slug}.md               # one file per channel
+  sources/
+    {source_id}-{slug}.md          # existing per-video notes,
+                                    #   with `parent_channel` front-matter
+```
+
+**Channel artifact schema.** Front-matter captures
+`channel_id` (YouTube's UC-prefixed internal ID), `handle`,
+`title`, `subscribers`, `total_uploads`, `topics`,
+`relevant_domains`, `videos_in_kb`, `videos_pending`,
+`videos_rejected`, `first_seen`, `last_seen`, `last_scan`,
+`status` (seed | discovered | deprecated), `quality_signal`
+(high | medium | low), `scan_interval_days`. Body has
+Description, Why this channel, Videos in KB (growing list),
+Videos rejected (quality-threshold rejections), Related channels.
+
+**Two status classes.** `seed` channels come from the manifest's
+`seed_channels` list — explicitly trusted, curated by the user.
+`discovered` channels are created automatically by `kb-absorb`
+when a video's parent channel isn't yet in the KB. Over time,
+users can promote productive discovered channels to seed status
+by editing the front-matter. `deprecated` suppresses channel-
+scoped expansion without deleting the artifact — preserves the
+historical record of videos that came from the channel.
+
+**Differentiated quality thresholds.** Channel-scoped discovery
+applies three thresholds depending on the provenance of the
+candidate (manifest `channel_discovery.seed_threshold`,
+`discovered_threshold`, `related_threshold`):
+
+| Provenance | Default threshold | Rationale |
+|------------|-------------------|-----------|
+| Seed-channel recent upload | 2 (lenient) | Channel is already trusted by user |
+| Discovered-channel upload | 3 (default) | Productivity not yet proven |
+| Related video (via tag search) | 4 (strict) | Adjacent not directly sought |
+
+**kb-absorb responsibility (channel artifact maintenance).**
+When absorbing a YouTube source, the skill resolves the parent
+channel via `mcp__youtube-api__getVideoDetails` (1 quota unit).
+If the channel artifact doesn't exist → create it with
+`status: discovered`. If it does → increment `videos_in_kb`,
+update `last_seen`, append to "Videos in KB" list. The video
+source note's front-matter gains `parent_channel:
+channel-{handle-slug}` for bidirectional linkage. Channel
+artifacts are NOT auto-promoted to mem0 (they're local sources,
+not cross-project insights).
+
+**kb-discover responsibility (Round 2.5 channel-scoped
+expansion).** After Round 2's query-driven gap-fill, if the
+YouTube API MCP has the full 8 tools registered AND the manifest
+has `channel_discovery.enabled: true`:
+
+- **Sub-Round A — Recent uploads from known channels.** For each
+  seed and discovered channel whose `last_scan + scan_interval_days`
+  is in the past, call
+  `searchVideos({channelId, order: "date", maxResults: 10})`.
+  100 quota units per channel. Dedup + threshold per
+  provenance. Update `last_scan` regardless of yield.
+- **Sub-Round B — Tag-matched "related" videos.** YouTube Data
+  API's `relatedToVideoId` was deprecated 2023. Approximation:
+  for each recently-absorbed YouTube source (capped at
+  `max_expansions_per_review`), pull the video's tags via
+  `getVideoDetails(includeTags: true)`, construct a compact
+  query from 3-5 highest-signal tags, and run `searchVideos(
+  order: "relevance", recency: "pastYear")`. 101 quota units per
+  expansion. Apply the strict `related_threshold`.
+
+**kb-refresh responsibility (Categories 11 + 12).**
+- Category 11 flags channels with stale `last_scan`
+  (severity scales with count).
+- Category 12 flags low-productivity channels (in KB > 90 days
+  with `videos_in_kb == 0`) — a curation signal; Info severity.
+
+**Quota economics.** A kb-review cycle with 10 scheduled
+channel scans + 20 related-video expansions consumes
+`10 * 100 + 20 * 101 = 3020 quota units`, ~30% of the 10,000/day
+free tier. `scan_interval_days` (default 14) and
+`max_expansions_per_review` (default 20) are the primary cost
+controls. Tuning these is the recommended first response to
+quota pressure.
+
+**What this doesn't yet include** (future work, not in this
+version):
+- Playlist artifacts. YouTube playlists have coherent
+  topical structure (e.g., a conference's talks) that channels
+  don't. The `@kirbah/mcp-youtube` package doesn't expose
+  playlist tools; would require either switching MCPs or
+  building a playlist reader ourselves.
+- Creator graph (who interviews whom, co-occurrence edges
+  across channels). Could be inferred post-hoc from absorbed
+  content but needs a dedicated analysis pass.
+- Channel topic auto-inference. `getChannelStatistics`
+  doesn't return topic IDs; would need transcript- or
+  tag-clustering pass. Punted; users fill `topics` manually
+  for now.
+
 ## 4. Project Manifests
 
 All project-specific knowledge lives in **project manifest** files — YAML
@@ -1235,6 +1350,8 @@ The `/kb-refresh` skill checks 9 categories of knowledge base health:
 | 8 | Stale syntheses | Domain synthesis not updated after new source absorption | Warning |
 | 9 | Pending mem0 queue | Entries in mem0-pending.md awaiting flush | Info/Warning |
 | 10 | Uncaptured journal sessions | Local transcripts exist that are newer than the journal bookmark | Info/Warning/Error (severity scales with count) |
+| 11 | Stale channel scans | YouTube channels with `last_scan + scan_interval_days` elapsed and `status != deprecated` | Info/Warning/Error (severity scales with count) |
+| 12 | Low-productivity channels | Channels in KB > 90 days with `videos_in_kb == 0` — curation signal | Info |
 
 ## 11. Fast.io Tool Quick Reference
 

@@ -129,6 +129,103 @@ Also look for:
 - Content that directly challenges or updates our foundational sources
 - Practitioner critiques of methods used in the project
 
+### Round 2.5: Channel-Scoped Expansion (YouTube)
+
+After Round 2's query-driven gap-fill, expand the YouTube corpus
+using already-absorbed videos and known channels as seeds. This
+round is YouTube-only; other source types skip it.
+
+**Gate:** run only if the manifest's
+`source_adapters.youtube.channel_discovery.enabled` is `true`
+AND the YouTube API MCP is registered with the YOUTUBE_API_KEY
+env (verify by checking that `mcp__youtube-api__searchVideos` is
+in the tool registry — not just `mcp__youtube-api__getTranscripts`,
+which registers even without the key).
+
+If the gate fails → skip this round silently; log in the Work Log
+that channel-scoped expansion was not available this cycle.
+
+**Inputs gathered before the expansion loop:**
+
+1. List channels in `{project_folder}/channels/` via `storage/list`
+   or `workspace/read-note` on the channels INDEX. Partition into:
+   - `seed_channels` (manifest seeds + channel artifacts with
+     `status: seed`)
+   - `discovered_channels` (channel artifacts with
+     `status: discovered`)
+   - `deprecated_channels` (status: deprecated — skip entirely)
+2. Load recently absorbed YouTube source notes (last 90 days)
+   from `{project_folder}/sources/` for "related video" seeding.
+
+**Differentiated quality thresholds (Q2=C rule):**
+
+| Source of candidate | Quality threshold |
+|---------------------|-------------------|
+| Seed-channel recent upload | 2 (lenient — channel is trusted) |
+| Discovered-channel recent upload | 3 (default) |
+| Related-video from absorbed source | 4 (strict — adjacent, not directly sought) |
+
+**Sub-Round A: Recent uploads from known channels**
+
+For each channel in `seed_channels ∪ discovered_channels`:
+- If `last_scan + scan_interval_days` is in the future → skip
+  this channel this cycle (respect the per-channel cadence).
+- Else call
+  `mcp__youtube-api__searchVideos({channelId: <UC...>, order: "date", maxResults: 10, type: "video"})`.
+  Costs 100 quota units per channel.
+- For each result, dedup against INDEX. Apply the seed or
+  discovered threshold per the table above.
+- New candidates → add to pending queue with `parent_channel:
+  channel-{handle-slug}` field in INDEX row.
+- Update the channel artifact's `last_scan` date regardless of
+  whether new videos were found.
+
+**Sub-Round B: "Related" videos from absorbed sources**
+
+YouTube Data API's `relatedToVideoId` parameter was deprecated
+2023-08. The MCP does not expose a replacement. Approximate
+via tag-matched keyword search:
+
+For each recently-absorbed YouTube source (capped by manifest
+`channel_discovery.max_expansions_per_review`, default 20):
+1. `mcp__youtube-api__getVideoDetails({videoIds: [source_id],
+   includeTags: true, descriptionDetail: "SNIPPET"})` — 1 unit.
+2. Extract the video's tags (typically 5-20). Filter to domain-
+   relevant tags using the domain's `search_queries` as keyword
+   references.
+3. Construct a compact query from 3-5 highest-signal tags joined
+   with spaces.
+4. `mcp__youtube-api__searchVideos({query: <tag-query>, order:
+   "relevance", maxResults: 5, recency: "pastYear"})` — 100 units.
+5. Dedup against INDEX. Apply the related-video threshold (4).
+
+**Quota budget:** each channel scan costs 100 units; each related-
+video expansion costs 101 units (1 for video details + 100 for
+search). Daily free tier is 10,000 units. A review cycle against
+10 channels + 20 related expansions = 1000 + 2020 = 3020 units —
+~30% of the daily budget. Manifest field
+`channel_discovery.max_expansions_per_review` (default 20) caps
+related-video expansions; no cap on channel scans but those are
+already rate-limited by `scan_interval_days`.
+
+**Report this round's output:**
+
+```
+Round 2.5 — Channel-Scoped Expansion
+  Channels scanned: {N_seed} seed + {N_discovered} discovered
+    ({N_scanned} this cycle, {N_deferred} per scan_interval)
+  Recent uploads found: {N}
+    Passed seed threshold ({seed_qt}): {N}
+    Passed discovered threshold ({disc_qt}): {N}
+    Rejected: {N}
+  Related-video expansions: {N_expanded} / {cap}
+    New candidates: {N}
+    Passed threshold ({related_qt}): {N}
+    Rejected: {N}
+  Deprecated channels skipped: {N}
+  Quota units consumed: ~{N}
+```
+
 ### Round 3: Contradiction & Quality Check
 
 For each candidate source from Rounds 1-2:

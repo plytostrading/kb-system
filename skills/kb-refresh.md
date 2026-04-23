@@ -199,6 +199,65 @@ with the session count: older transcripts may be trimmed by Claude
 Code's retention policy, and the more sessions pile up, the larger
 the distillation cost when finally run.
 
+#### Category 11: Stale Channel Scans
+
+**Check:** YouTube channel artifacts in
+`{project_folder}/channels/` with `status != deprecated` whose
+`last_scan` date + their `scan_interval_days` has elapsed.
+
+**How:**
+1. `storage/list` on `{project_folder}/channels/`.
+2. For each channel artifact: `workspace/read-note`, parse
+   front-matter `last_scan` and `scan_interval_days` (default 14).
+3. Flag channels where `(today - last_scan) > scan_interval_days`
+   AND `status != deprecated`.
+4. For channels with `last_scan == null` (never scanned), always flag.
+
+**Severity:**
+- Info if 1–3 channels overdue
+- Warning if 4–9
+- Error if ≥10 (channel-based discovery pipeline is substantially
+  stale)
+
+**Auto-fix:** Not applicable in kb-refresh itself. Next
+`/kb-discover` cycle with channel_discovery.enabled will scan
+all overdue channels as part of Round 2.5. Alternatively, invoke
+`/kb-discover --project {name}` in isolation to run the scan
+without a full review.
+
+**Why this matters:** Channel-based discovery is the primary
+low-cost (1 unit/channel) expansion path for YouTube content. A
+stale-scan backlog means you're missing recently-published videos
+from channels you've explicitly seeded as trusted — which is
+exactly the high-signal content the KB most wants.
+
+#### Category 12: Low-Productivity Channels
+
+**Check:** Channels in KB for more than 90 days with zero videos
+absorbed. Suggests the channel isn't producing content matching
+the project's domains, or the quality threshold is filtering
+everything out.
+
+**How:**
+1. For each channel artifact where `(today - first_seen) > 90`
+   AND `videos_in_kb == 0`:
+2. Compute `videos_rejected` count from the channel's
+   "Videos rejected" section.
+3. Flag with suggestion: review the channel, either promote
+   quality_signal to low + status deprecated, or adjust the
+   seed's per-channel threshold if the rejection rate is high
+   but the channel's content genuinely matches the domains.
+
+**Severity:** Info (never escalates — this is a curation signal,
+not a blocker).
+
+**Auto-fix:** Not applicable. User decides whether to deprecate.
+
+**Why this matters:** Low-productivity channels consume ~1 quota
+unit per scan with no return. Over months, they also clutter the
+channels INDEX. Periodic review ensures the channel roster stays
+high-signal.
+
 ### Step 3: Report
 
 ```

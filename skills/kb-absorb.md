@@ -210,6 +210,151 @@ cross-source synthesis that raw transcripts cannot provide.
 - **Fallback:** Use `WebFetch` on the tweet URL (may only get first tweet)
 - **Snapshot:** Capture full thread text in the note — tweets are ephemeral
 
+#### 2a-CH. Channel artifact maintenance (YouTube only)
+
+For every YouTube source, maintain a corresponding channel artifact
+in `{project_folder}/channels/`. Channel artifacts are first-class
+notes that accumulate metadata about productive source creators;
+they enable channel-scoped discovery (kb-discover Round 2.5) and
+provide a roster view of the creator corpus.
+
+**Step 2a-CH.1: Resolve the parent channel from the video**
+
+If the preferred discovery path ran and the MCP tool exposed the
+video's `channelId`, use it directly. Otherwise, fetch via
+`mcp__youtube-api__getVideoDetails({videoIds: [this_video_id]})`
+(costs 1 quota unit). The returned `snippet.channelId` is the
+canonical UC-prefixed YouTube internal channel ID; the
+`snippet.channelTitle` is the display name.
+
+To resolve the `@handle` (needed for the filename slug), use
+`mcp__youtube-api__searchVideos({query: channel_title, type:
+"channel", maxResults: 1})` if the handle isn't already known —
+the first result's `snippet.customUrl` yields the handle. Cache
+this mapping; re-resolving for every video is wasteful.
+
+**Step 2a-CH.2: Check for existing channel artifact**
+
+Slug the handle: lowercase, strip the leading `@`, alphanumerics
+and dashes only. Path:
+`{project_folder}/channels/{handle-slug}.md`.
+
+Use `workspace/read-note` to check existence. Three cases:
+
+- **Exists**: read front-matter. Increment `videos_in_kb` by 1.
+  Update `last_seen` to today. Append the new video to the
+  "Videos in KB" section. Re-write the note via
+  `workspace/update-note`. Continue to 2b.
+
+- **Does not exist**: create it with the template below. Mark
+  `status: discovered` (NOT `seed` — seeds come from the manifest
+  `seed_channels` list; discovered means "we found it while
+  absorbing a video"). Continue to 2b.
+
+- **Exists but marked `status: deprecated`**: note this in the
+  source note's `Session Metadata Notes` section ("parent channel
+  {handle} is marked deprecated; video absorption proceeding but
+  future auto-expansion from this channel is suppressed") and
+  continue. Do NOT update the channel artifact's `videos_in_kb`
+  count — the video is absorbed but deliberately orphaned from
+  the channel roster.
+
+**Step 2a-CH.3: Channel artifact template (first-time creation)**
+
+Use `workspace/create-note` with this body:
+
+```markdown
+---
+source_id: channel-{handle-slug}
+type: youtube_channel
+channel_id: UC...                   # YouTube's internal ID
+handle: '@{handle}'
+title: {channel display title}
+subscribers: {N}                    # from getChannelStatistics
+total_uploads: {N}                  # from getChannelStatistics
+topics: []                          # manually populated or auto-inferred later
+relevant_domains: []                # populate when the user reviews / curates
+videos_in_kb: 1
+videos_pending: 0
+videos_rejected: 0
+first_seen: {YYYY-MM-DD}
+last_seen: {YYYY-MM-DD}
+last_scan: null                     # set when kb-discover scans this channel
+status: discovered                  # discovered | seed | deprecated
+quality_signal: medium              # medium by default; user-overridable
+scan_interval_days: 14              # default; per-channel override via manifest
+---
+
+# {Channel Title}
+
+## Description
+{Auto-populated from getChannelStatistics if available. User can edit.}
+
+## Why this channel
+Discovered via video absorption: {video_source_id} on {date}.
+
+## Videos in KB
+- {video_source_id}: {Video Title} ({upload_date}) — [link to source note]
+
+## Videos rejected (below quality threshold)
+_(populated by kb-discover Round 3 when scanning this channel)_
+
+## Related channels
+_(populated over time via co-occurrence in absorbed content)_
+```
+
+Apply metadata via `workspace/metadata-set`:
+`type: youtube_channel`, `source_id`, `channel_id`, `handle`,
+`status`, `quality_signal`.
+
+**Step 2a-CH.4: Update the video source note's front-matter**
+
+When writing the video's source note in Step 2e, include in
+front-matter:
+```yaml
+parent_channel: channel-{handle-slug}
+```
+
+This creates the bidirectional link: channel → videos-in-KB list
+(via the channel's body) and video → parent channel (via
+front-matter).
+
+**Step 2a-CH.5: Update the channels INDEX**
+
+Use `workspace/update-note` on
+`{project_folder}/channels/INDEX.md`. Create the file if absent
+with this structure:
+
+```markdown
+# Channel Index — {project_name}
+Last updated: {date}
+
+## Active Channels
+| handle | title | status | quality | videos | last seen | scan next |
+|--------|-------|--------|---------|--------|-----------|-----------|
+| @flirtingwithmodels | Flirting with Models | seed | high | 3 | 2026-04-23 | 2026-04-30 |
+| ... |
+
+## Deprecated Channels
+| handle | title | deprecated on | reason |
+|--------|-------|--------------|--------|
+
+## Topic Coverage
+| domain | active channels |
+|--------|-----------------|
+```
+
+Re-sort the Active Channels table by `last seen` descending after
+any update.
+
+**Step 2a-CH.6: mem0 promotion policy for channels**
+
+Channels are NOT auto-promoted to mem0. They're discoverable via
+Fast.io semantic search and via the INDEX roster, but don't elevate
+to mem0's cross-project recall layer. This matches the
+kb-note insight-only promotion policy: mem0 is for generalizable
+patterns, not project-specific sources.
+
 #### 2b. Extract Structured Knowledge
 
 From the source content (regardless of type), extract:

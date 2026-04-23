@@ -90,8 +90,29 @@ source_adapters:
       fallback: web_fetch
     credentials:
       youtube_api_key: env:YOUTUBE_API_KEY
-    quality_threshold: 3
-    seed_channels: []                    # e.g., ["@ChannelName"]
+    quality_threshold: 3                 # Default for query-driven discovery
+    # seed_channels: structured list of trusted channels. Each entry
+    # creates (or updates) a channel artifact at {project}/channels/{handle-slug}.md
+    # on the first kb-review cycle. Per-entry overrides on scan_interval_days
+    # (default 14) and quality_threshold (defaults to the differentiated
+    # thresholds from channel_discovery below).
+    seed_channels: []
+    #   - handle: '@FlirtingwithModelsCorey'
+    #     relevant_domains: [weak-signal-construction, regime-conditioning]
+    #     scan_interval_days: 7
+    #     quality_signal: high             # high | medium | low
+    #   - handle: '@AQRCapitalManagement'
+    #     relevant_domains: [weak-signal-construction]
+    #     scan_interval_days: 14
+    channel_discovery:
+      enabled: true                      # Master switch for Round 2.5 in kb-discover
+      strategy: seeds_plus_related       # seeds_only | seeds_plus_related | aggressive
+      max_expansions_per_review: 20      # Cap on related-video expansions per review
+      recency_days: 365                  # Ignore videos older than this
+      # Differentiated quality thresholds (Q2=C):
+      seed_threshold: 2                  # Lenient for seed-channel recent uploads
+      discovered_threshold: 3            # Default for discovered-channel uploads
+      related_threshold: 4               # Strict for "related videos" from absorbed sources
 
   twitter:
     discovery:
