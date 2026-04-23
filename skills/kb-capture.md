@@ -277,19 +277,80 @@ Capture session metadata:
 - `cwd`: infer from sanitized folder name
 - `message_count`, `thinking_block_count`, `tool_call_count`
 
+#### 3a.5: Read Existing Active Notes for This Session
+
+Before distilling, check whether the agent (or user) actively
+journaled decisions during this session via the `kb-note` skill.
+Active notes are AUTHORITATIVE for the decisions they cover —
+retrospective distillation must NOT re-emit them, and MUST link
+to them.
+
+1. Compute `session_id8 = session_id[:8]` (same short form kb-note
+   uses in filenames).
+2. List files in `{project_folder}/journal/notes/` via
+   `storage/list` or `workspace/read-note` on the INDEX —
+   match filenames of the form `{YYYY-MM-DD}-{session_id8}-*.md`.
+3. For each matching file, `workspace/read-note` to extract:
+   - `seq` (from front-matter)
+   - `type` (decision / diagnostic / insight / open_thread)
+   - `title` (from front-matter)
+   - The first 2-3 sentences of the body (for summary / dedup check)
+   - Full file path (for linking)
+4. Build an `active_notes` list, ordered by `seq`. This becomes
+   input to the distillation prompt in 3b.
+
+If no active notes exist for this session → empty list, proceed
+normally. Retrospective distillation behaves as it did before
+Phase 2 — it covers everything, because nothing was actively
+journaled.
+
+If active notes exist → the distillation prompt receives them and
+must:
+- Exclude the decisions they cover from its own `Decisions`
+  section (no duplication)
+- Cross-link to them via the `Related` subsection of each
+  retrospective decision it DOES emit (so readers can navigate
+  between active and retrospective entries for the same session)
+- Populate a new `Missed Decisions` section — decisions the
+  distiller inferred from the user/assistant/tool arc that
+  weren't in the active-notes list. This is the "what the agent
+  forgot to actively journal" signal.
+
 #### 3b: Distill into Structured Journal Note
 
 Apply the distillation prompt below. The distillation is performed by
 the Claude instance executing this skill (reflexive: the agent reads
 its own prior thinking).
 
-**Distillation prompt (version: journal-distill-v1):**
+**Distillation prompt (version: journal-distill-v2):**
 
 ```
-You are reading session transcript material to produce a structured
-decision journal. Be faithful to the source — do not invent reasoning
-that wasn't present. Compress what's redundant; preserve branches and
-revisions.
+You are reading session transcript material — user turns, assistant
+text output, tool calls, thinking blocks where available — PLUS a
+list of active notes already journaled for this session via the
+kb-note skill. Your job is to produce a RETROSPECTIVE SESSION
+SUMMARY that COMPLEMENTS those active notes, NOT duplicates them.
+
+Rules:
+- Be faithful to the source. Do not invent reasoning that wasn't
+  present. Compress redundancy; preserve branches and revisions.
+- If the active notes cover a decision, do NOT re-emit that decision
+  in your Decisions section. Cross-link to the active note via the
+  Related subsection of any retrospective decision that depends on it.
+- Decisions you infer from the user/assistant/tool arc that were
+  NOT in the active notes go into a separate "Missed Decisions"
+  section. This is the signal of "what the agent should have
+  journaled but didn't" — it's the primary signal that feeds the
+  catch-up value of retrospective distillation when active
+  journaling is used.
+- Diagnostics, Insights, Open Threads: follow the same
+  authoritative-active rule. If the active notes already cover a
+  finding, don't re-emit it; cross-link when referencing.
+- Session Summary and narrative-arc content (the WHY of the whole
+  session, not just individual decisions) is the UNIQUE value of
+  the retrospective summary. Always write it, even when active
+  notes are comprehensive. This is how retrospective distillation
+  earns its keep in the layered design.
 
 Output this structure (markdown). Omit sections that would be empty.
 
@@ -310,6 +371,11 @@ thinking_block_count: {N}
 tool_call_count: {N}
 user_turn_count: {N}
 compaction_events: {N}
+active_notes_count: {N}
+active_notes_referenced:
+  - notes/{filename1}
+  - notes/{filename2}
+missed_decisions_count: {N}
 ---
 
 # Session Journal — {date} — {one-line topic}
@@ -317,8 +383,22 @@ compaction_events: {N}
 ## Session Summary
 2-3 sentences. What was worked on, what the arc was.
 
+## Active Notes (cross-reference, not re-emission)
+
+If the session has active notes, list them here as a navigation aid
+BEFORE the Decisions section:
+
+- [seq 001, decision] Title — link to notes/{filename}
+- [seq 002, insight] Title — link
+- ...
+
+This is a thin index. Do NOT re-describe the content of active
+notes here. Readers click through to the individual note files.
+
 ## Decisions
-Numbered list. For each non-trivial decision:
+
+Numbered list. For each non-trivial decision that was NOT covered
+by an active note:
 
 ### D{N}: {short title in imperative voice}
 **Context:** what situation prompted it
@@ -326,8 +406,8 @@ Numbered list. For each non-trivial decision:
 **Alternatives considered:** other approaches weighed + reasons rejected
 **Rationale:** why this one (causal, not just preferential)
 **Artifacts:** commits, files, notes this decision produced or affected
-**Related:** earlier decisions (D{M}) or external refs (commit SHAs,
-URLs, prior journals)
+**Related:** earlier decisions (D{M}), active notes (notes/{filename}),
+or external refs (commit SHAs, URLs, prior journals)
 
 Rule of thumb: a decision is journal-worthy when (a) the agent chose
 among ≥2 considered alternatives, (b) the choice hinges on non-obvious
@@ -336,28 +416,57 @@ change. "Read this file to check syntax" is NOT a decision. "Use
 cherry-pick instead of interactive rebase because content-equivalence
 is mechanically provable via tree SHAs" IS a decision.
 
+**Coverage rule:** if an active note covers a decision in full
+(same Context, Decision, Alternatives, Rationale), DO NOT re-emit
+it here. Cross-link from Missed Decisions or from dependent
+decisions' Related field if relevant.
+
+## Missed Decisions (if any)
+
+Decisions inferred from the user/assistant/tool arc that were NOT
+captured in active notes. This section is the primary catch-up
+value of retrospective distillation when active journaling is
+used. Format is the same as Decisions above — each entry a full
+D{N} block so that after this distillation runs, every decision
+in the session is either (a) in an active note or (b) in Missed
+Decisions. Nothing falls through.
+
+If active_notes_count is zero, this section is equivalent to
+Decisions — merge them under a single "Decisions" header and
+omit "Missed Decisions." If active_notes_count is non-zero,
+both sections may exist and are complementary.
+
 ## Diagnostics
 Non-obvious findings that changed the plan. Each: what was observed,
 what it implied, what changed as a result. Diagnostic ≠ decision — it's
-a fact that forced decisions elsewhere.
+a fact that forced decisions elsewhere. Apply the same "exclude active
+notes" rule: if a diagnostic is already in an active `diagnostic`-type
+note, skip it here and link from the Related section of any dependent
+decision.
 
 ## Insights
 Generalizable patterns or principles surfaced that extend beyond this
 session. Be honest: if nothing general came up, omit the section.
+Again, exclude insights already in active `insight`-type notes.
 
 ## Artifacts Touched
 - Commits: {repo}@{sha} — {subject}
 - Files modified: {repo}/{path}
 - Fast.io notes: {path}
+- Active notes: {list of notes/{filename} links for this session}
 - External: URLs consulted
 
 ## Open Threads
 Unresolved items the agent noted but didn't close in this session.
+Exclude threads already in active `open_thread`-type notes.
 
 ## Session Metadata Notes
 Any patterns in the session worth noting for distillation-quality
-feedback (e.g. "agent got stuck for 20 min on X, took approach Y after
-Z"). Keep brief.
+feedback (e.g. "agent got stuck for 20 min on X, took approach Y
+after Z", "13 active notes recorded during session — active
+journaling is working well here", or "0 active notes despite long
+session — agent may not have been prompted to journal, check
+CLAUDE.md configuration"). Keep brief.
 ```
 
 When applying this prompt, give yourself a soft budget of
@@ -435,23 +544,41 @@ Last updated: {date}
 | ... |
 
 ## Decision Quick Reference
-- {date} / {sid-prefix}: D{N} — {decision title} → {link}
+
+Unified view across active notes (from kb-note) and retrospective
+session summaries. Each row tagged with its source:
+
+- 2026-04-23 / 7d26f67a / active D001 (decision): Framing C layered paths → notes/2026-04-23-7d26f67a-001-....md
+- 2026-04-23 / 0343f10a / retro D001 (decision, missed): ... → 2026-04-23-0343f10a-distilled.md#d1
 - ...
 ```
 
+The `source` column distinguishes `active` entries (written at
+decision-time via kb-note, `fidelity: full`) from `retro` entries
+(retrospective distillation by kb-capture; fidelity depends on
+JSONL + Claude Code version + terminal-capture availability). The
+`(missed)` suffix on retro entries flags decisions that weren't
+covered by an active note — the signal for whether active
+journaling discipline is working.
+
 The quick reference lets readers scan the full decision history
-without opening each journal. Cap at ~100 most-recent entries; older
-ones remain in the per-session notes and the table above.
+without opening each journal. Cap at ~100 most-recent entries;
+older ones remain in the per-session notes and the table above.
 
 ### Step 4: Update Hot Cache
 
 Read `{project_folder}/hot.md` via `workspace/read-note`. Append (or
-replace, if present) a section:
+replace, if present) a section combining the most recent decisions
+across BOTH active notes (from kb-note) and retrospective summaries
+(from this run + prior runs). The goal: kb-assess's Layer 1 Context
+read gets a unified, provenance-tagged view.
 
 ```markdown
 ## Recent Decisions (from journal captures)
 Last captured: {date}
-- D{N} ({date} / {sid-prefix}): {title} — {one-line rationale}
+- [active]  D{N} ({date} / {sid-prefix}): {title} — {one-line rationale}
+- [retro]   D{N} ({date} / {sid-prefix}): {title} — {one-line rationale}
+- [retro-missed] D{N} ({date} / {sid-prefix}): {title} — {one-line rationale}
 - ...
 (up to 5 most recent decisions across all captured sessions)
 ```
